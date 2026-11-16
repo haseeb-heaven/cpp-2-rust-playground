@@ -407,9 +407,12 @@ pub fn map_cpp_type_to_rust(raw_type: &str, state: &mut TranslatorState) -> Stri
         "unsigned int" | "unsigned" | "uint32_t" => "u32".to_string(),
         "long" | "long long" | "int64_t" => "i64".to_string(),
         "unsigned long" | "unsigned long long" | "uint64_t" | "size_t" => "usize".to_string(),
+        "unsigned short" | "uint16_t" => "u16".to_string(),
         "short" | "int16_t" => "i32".to_string(),
+        "signed char" | "int8_t" => "i8".to_string(),
+        "unsigned char" | "uint8_t" => "u8".to_string(),
         "float" => "f32".to_string(),
-        "double" => "f64".to_string(),
+        "double" | "long double" => "f64".to_string(),
         "bool" => "bool".to_string(),
         "char" => "char".to_string(),
         "void" => "()".to_string(),
@@ -960,6 +963,74 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         updated = strlen_regex
             .replace_all(&updated, "$1.len() as i32")
             .to_string();
+        let sizeof_regex = Regex::new(r"\bsizeof\s*\(\s*([^()]+?)\s*\)").unwrap();
+        updated = sizeof_regex
+            .replace_all(&updated, |captures: &regex::Captures| {
+                let inner = captures.get(1).unwrap().as_str().trim();
+                if state.declared_variables.contains(inner) {
+                    return format!("std::mem::size_of_val(&{})", inner);
+                }
+                let rust_type = match inner {
+                    "long double" | "double" => "f64",
+                    "float" => "f32",
+                    "char" | "signed char" | "unsigned char" | "int8_t" | "uint8_t" => "u8",
+                    "short" | "unsigned short" | "int16_t" | "uint16_t" => "i16",
+                    "int" | "unsigned int" | "signed" | "unsigned" | "int32_t" | "uint32_t" => {
+                        "i32"
+                    }
+                    "long" | "unsigned long" | "long long" | "unsigned long long" | "int64_t"
+                    | "uint64_t" => "i64",
+                    "size_t" | "ssize_t" | "uintptr_t" | "intptr_t" => "usize",
+                    "bool" | "_Bool" => "bool",
+                    other if other.ends_with('*') => "*const ()",
+                    other => other,
+                };
+                format!("std::mem::size_of::<{}>()", rust_type)
+            })
+            .to_string();
+        const C_LIMIT_MACROS: &[(&str, &str)] = &[
+            ("LDBL_MANT_DIG", "f64::MANTISSA_DIGITS"),
+            ("DBL_MANT_DIG", "f64::MANTISSA_DIGITS"),
+            ("FLT_MANT_DIG", "f32::MANTISSA_DIGITS"),
+            ("LDBL_DIG", "f64::DIGITS"),
+            ("DBL_DIG", "f64::DIGITS"),
+            ("FLT_DIG", "f32::DIGITS"),
+            ("LDBL_MAX", "f64::MAX"),
+            ("DBL_MAX", "f64::MAX"),
+            ("FLT_MAX", "f32::MAX"),
+            ("LDBL_MIN_EXP", "f64::MIN_EXP"),
+            ("DBL_MIN_EXP", "f64::MIN_EXP"),
+            ("LDBL_MAX_EXP", "f64::MAX_EXP"),
+            ("DBL_MAX_EXP", "f64::MAX_EXP"),
+            ("LDBL_MIN", "f64::MIN_POSITIVE"),
+            ("DBL_MIN", "f64::MIN_POSITIVE"),
+            ("FLT_MIN", "f32::MIN_POSITIVE"),
+            ("LDBL_EPSILON", "f64::EPSILON"),
+            ("DBL_EPSILON", "f64::EPSILON"),
+            ("FLT_EPSILON", "f32::EPSILON"),
+            ("FLT_MIN_EXP", "f32::MIN_EXP"),
+            ("FLT_MAX_EXP", "f32::MAX_EXP"),
+            ("INT_MAX", "i32::MAX"),
+            ("INT_MIN", "i32::MIN"),
+            ("UINT_MAX", "u32::MAX"),
+            ("LONG_MAX", "i64::MAX"),
+            ("LLONG_MAX", "i64::MAX"),
+            ("LONG_MIN", "i64::MIN"),
+            ("LLONG_MIN", "i64::MIN"),
+            ("ULONG_MAX", "u64::MAX"),
+            ("ULLONG_MAX", "u64::MAX"),
+            ("SHRT_MAX", "i16::MAX"),
+            ("SHRT_MIN", "i16::MIN"),
+            ("USHRT_MAX", "u16::MAX"),
+            ("CHAR_BIT", "u8::BITS"),
+        ];
+        for &(c_macro, rust_const) in C_LIMIT_MACROS {
+            if updated.contains(c_macro) {
+                let macro_regex =
+                    Regex::new(&format!(r"\b{}\b", regex::escape(c_macro))).unwrap();
+                updated = macro_regex.replace_all(&updated, rust_const).to_string();
+            }
+        }
         let ctype_funcs = [
             ("isdigit", "is_ascii_digit"),
             ("isalpha", "is_ascii_alphabetic"),
@@ -1150,15 +1221,26 @@ fn translate_printf_statement(
 
     converted_format = converted_format.replace("%%", "__RUSTC_PCT__");
     let specifier_regex =
-        Regex::new(r"%(?:[-+0 #])*(?:\d+|\*)?(?:\.(\d+))?(?:hh|h|ll|l|z)?([diuoxXfFeEgGcsp])")
+        Regex::new(r"%(?:[-+0 #])*(?:\d+|\*)?(?:\.(\d+))?(?:hh|h|ll|l|L|z|j|t)?([diuoxXfFeEgGcsp])")
             .unwrap();
+    let mut spec_list: Vec<(String, Option<usize>)> = Vec::new();
     converted_format = specifier_regex
         .replace_all(&converted_format, |captures: &regex::Captures| {
             let spec_char = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            if let Some(precision) = captures.get(1) {
-                format!("{{:.{}}}", precision.as_str())
-            } else if spec_char == "f" || spec_char == "F" {
-                "{:.6}".to_string()
+            let prec_opt = captures
+                .get(1)
+                .and_then(|m| m.as_str().parse::<usize>().ok());
+            spec_list.push((spec_char.to_string(), prec_opt));
+            if spec_char == "f" || spec_char == "F" {
+                if let Some(precision) = prec_opt {
+                    format!("{{:.{}}}", precision)
+                } else {
+                    "{:.6}".to_string()
+                }
+            } else if matches!(spec_char, "g" | "G" | "e" | "E") {
+                "{}".to_string()
+            } else if let Some(precision) = prec_opt {
+                format!("{{:.{}}}", precision)
             } else {
                 "{}".to_string()
             }
@@ -1171,7 +1253,35 @@ fn translate_printf_statement(
         Some(args) if !args.trim().is_empty() => {
             let translated_args = split_top_level_comma(args)
                 .into_iter()
-                .map(|arg| translate_expression_with_state(arg, state))
+                .enumerate()
+                .map(|(index, arg)| {
+                    let translated_arg = translate_expression_with_state(arg, state);
+                    if let Some((spec_char, prec_opt)) = spec_list.get(index) {
+                        if matches!(spec_char.as_str(), "g" | "G" | "e" | "E") {
+                            let exp_char = if spec_char == "G" || spec_char == "E" {
+                                "E"
+                            } else {
+                                "e"
+                            };
+                            let exp_prec = if spec_char == "g" || spec_char == "G" {
+                                prec_opt.unwrap_or(6).saturating_sub(1)
+                            } else {
+                                prec_opt.unwrap_or(6)
+                            };
+                            return format!(
+                                "format!(\"{{:.{}{}}}\", {}).replace(\"{}-\", \"__EXP_NEG__\").replace(\"{}\", \"{}+\").replace(\"__EXP_NEG__\", \"{}-\")",
+                                exp_prec,
+                                exp_char,
+                                translated_arg,
+                                exp_char,
+                                exp_char,
+                                exp_char,
+                                exp_char
+                            );
+                        }
+                    }
+                    translated_arg
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
@@ -1307,6 +1417,12 @@ fn translate_single_line_core(
                 state
                     .required_imports
                     .insert("std::collections::VecDeque".to_string());
+            }
+            "float.h" | "cfloat" => {
+                return format!(
+                    "{}// #include <{}> (C long double / LDBL_* has no distinct stable Rust primitive; mapped to f64)",
+                    leading_whitespace, header
+                );
             }
             _ => {}
         }

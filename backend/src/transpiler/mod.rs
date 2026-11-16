@@ -302,4 +302,30 @@ bool IsValidNumber(char *p_input, int base) {
             .generated_rust_code
             .contains("if base < 2 || base > 36 { return false; }"));
     }
+
+    #[test]
+    fn converts_float_h_long_double_sizeof_and_emits_compatibility_warning() {
+        let c_source = r#"#include <float.h>
+#include <stdio.h>
+
+int main(void) {
+    printf("sizeof(long double): %zu\n", sizeof(long double));
+    printf("LDBL_MANT_DIG: %d\n", LDBL_MANT_DIG);
+    printf("LDBL_DIG: %d\n", LDBL_DIG);
+    printf("LDBL_MAX: %Lg\n", LDBL_MAX);
+    return 0;
+}"#;
+        let result = convert_source_to_rust(c_source, &SourceLanguage::C);
+        assert!(result
+            .generated_rust_code
+            .contains("std::mem::size_of::<f64>()"));
+        assert!(result
+            .generated_rust_code
+            .contains("f64::MANTISSA_DIGITS"));
+        assert!(result.generated_rust_code.contains("f64::DIGITS"));
+        assert!(result.generated_rust_code.contains("f64::MAX"));
+        assert!(result.diagnostics.iter().any(|diag| {
+            diag.severity == DiagnosticSeverity::Warning && diag.message.contains("long double")
+        }));
+    }
 }

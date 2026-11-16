@@ -967,5 +967,25 @@ int main(void) {
             .to_string(),
             default_stdin: String::new(),
         },
+        CodeExample {
+            identifier: "c-float-limits-sizeof".to_string(),
+            title: "Float Limits & sizeof(long double) (C)".to_string(),
+            category: "Types & Compatibility".to_string(),
+            difficulty: "Medium".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Inspects long double size and <float.h> LDBL_* limits, mapped to Rust std::mem::size_of::<f64>() and f64 constants with compatibility diagnostics.".to_string(),
+            source_code: r#"#include <float.h>
+#include <stdio.h>
+
+int main(void) {
+    printf("sizeof(long double): %zu\n", sizeof(long double));
+    printf("LDBL_MANT_DIG: %d\n", LDBL_MANT_DIG);
+    printf("LDBL_DIG: %d\n", LDBL_DIG);
+    printf("LDBL_MAX: %Lg\n", LDBL_MAX);
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
     ]
 }

@@ -198,6 +198,70 @@ pub fn analyze_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagno
                 ),
             });
         }
+
+        if trimmed.contains("long double") || trimmed.contains("LDBL_") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C/C++ 'long double' and LDBL_* macros have no distinct stable Rust primitive type (f128 is nightly-only); approximated using 'f64'.".to_string(),
+                suggested_fix: Some(
+                    "Use 'f64' (f64::MANTISSA_DIGITS, f64::DIGITS, f64::MAX) in stable Rust, or the 'f128' / 'rug' crate if extended precision is required.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.starts_with("union ") || trimmed.starts_with("typedef union") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C/C++ untagged 'union' has no safe Rust equivalent (reading a Rust 'union' field requires 'unsafe'); converted to a safe Rust 'struct'.".to_string(),
+                suggested_fix: Some(
+                    "Use a Rust tagged 'enum' for type-safe variants, or '#[repr(C)] union' with 'unsafe' blocks for low-level memory overlap.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.contains("void*") || trimmed.contains("void *") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C/C++ untyped 'void*' pointer has no safe Rust equivalent.".to_string(),
+                suggested_fix: Some(
+                    "Use generics '<T>', trait objects 'Box<dyn Any>', or an enum instead of 'void*'.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.contains("volatile ") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C/C++ 'volatile' qualifier has no variable-level equivalent in Rust.".to_string(),
+                suggested_fix: Some(
+                    "Use 'std::ptr::read_volatile' and 'std::ptr::write_volatile' for hardware register access.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.contains("va_list")
+            || trimmed.contains("va_start")
+            || trimmed.contains("setjmp")
+            || trimmed.contains("longjmp")
+        {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C variadic functions ('va_list') and non-local jumps ('setjmp'/'longjmp') have no direct Rust equivalent.".to_string(),
+                suggested_fix: Some(
+                    "Use slices '&[T]' or 'macro_rules!' instead of 'va_list', and 'Result<T, E>' with '?' instead of 'setjmp'/'longjmp'.".to_string(),
+                ),
+            });
+        }
     }
 
     for unclosed_line in brace_stack {
