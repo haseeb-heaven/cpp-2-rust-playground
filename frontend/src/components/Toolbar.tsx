@@ -270,7 +270,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <option value="local">
             {compilerAvailability &&
             (compilerAvailability.cppAvailable || compilerAvailability.rustAvailable)
-              ? "Local (Compilers Ready)"
+              ? `Local (${[
+                  compilerAvailability.cCompiler,
+                  compilerAvailability.cppCompiler,
+                  compilerAvailability.rustCompiler
+                ]
+                  .filter(Boolean)
+                  .join(", ")})`
               : "Local (Auto-Fallback)"}
           </option>
           <option value="online">Online (JDoodle)</option>

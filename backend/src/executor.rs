@@ -246,12 +246,29 @@ pub async fn execute_program(
 ) -> ExecutionResponse {
     match request.provider {
         Some(ExecutionProvider::Online) => {
+            tracing::info!(
+                language = ?request.language,
+                mode = ?request.mode,
+                provider = "online",
+                "Executing code via JDoodle Online API"
+            );
             execute_with_jdoodle(configuration, request, "online (JDoodle)").await
         }
         Some(ExecutionProvider::Local) | None => {
             if let Some(compiler_name) = find_local_compiler(&request.language) {
+                tracing::info!(
+                    language = ?request.language,
+                    mode = ?request.mode,
+                    compiler = %compiler_name,
+                    "Executing code using local compiler"
+                );
                 execute_locally(configuration, request, &compiler_name).await
             } else {
+                tracing::warn!(
+                    language = ?request.language,
+                    mode = ?request.mode,
+                    "No local compiler found; falling back to JDoodle Online API"
+                );
                 execute_with_jdoodle(
                     configuration,
                     request,
@@ -719,5 +736,52 @@ mod tests {
         assert!(response.used_provider.starts_with("local"));
         assert!(response.output.contains("10.5"));
         assert!(response.output.contains("155.664"));
+    }
+
+    #[tokio::test]
+    async fn executes_valid_c_and_cpp_locally_without_falling_back_to_online() {
+        let configuration = ApplicationConfiguration {
+            jdooodle_client_id: String::new(),
+            jdooodle_client_secret: String::new(),
+            jdooodle_api_url: "https://api.jdoodle.com/v1/execute".to_string(),
+            backend_port: 8080,
+            request_timeout_seconds: 10,
+        };
+
+        if find_local_compiler(&ExecutionLanguage::C).is_some() {
+            let c_response = execute_program(
+                &configuration,
+                &ExecutionRequest {
+                    code: "#include <stdio.h>\nint main() { printf(\"c-local-ok\\n\"); return 0; }"
+                        .to_string(),
+                    language: ExecutionLanguage::C,
+                    mode: ExecutionMode::Run,
+                    stdin_input: String::new(),
+                    provider: Some(ExecutionProvider::Local),
+                },
+            )
+            .await;
+            assert!(c_response.success);
+            assert!(c_response.used_provider.starts_with("local ("));
+            assert_eq!(c_response.output.trim(), "c-local-ok");
+        }
+
+        if find_local_compiler(&ExecutionLanguage::Cpp).is_some() {
+            let cpp_response = execute_program(
+                &configuration,
+                &ExecutionRequest {
+                    code: "#include <iostream>\nint main() { std::cout << \"cpp-local-ok\" << std::endl; return 0; }"
+                        .to_string(),
+                    language: ExecutionLanguage::Cpp,
+                    mode: ExecutionMode::Run,
+                    stdin_input: String::new(),
+                    provider: Some(ExecutionProvider::Local),
+                },
+            )
+            .await;
+            assert!(cpp_response.success);
+            assert!(cpp_response.used_provider.starts_with("local ("));
+            assert_eq!(cpp_response.output.trim(), "cpp-local-ok");
+        }
     }
 }

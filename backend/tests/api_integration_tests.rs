@@ -136,4 +136,50 @@ async fn execute_endpoint_reports_missing_credentials_cleanly() {
         .as_str()
         .unwrap()
         .contains("credentials"));
+    assert!(parsed["usedProvider"]
+        .as_str()
+        .unwrap()
+        .starts_with("online"));
+}
+
+#[tokio::test]
+async fn execute_endpoint_uses_local_compiler_when_local_provider_selected() {
+    if rustc_playground_backend::executor::find_local_compiler(
+        &rustc_playground_backend::models::ExecutionLanguage::Rust,
+    )
+    .is_none()
+    {
+        return;
+    }
+
+    let app = create_application_router(test_configuration());
+    let payload = json!({
+        "code": "fn main() { println!(\"strict-local\"); }",
+        "language": "rust",
+        "mode": "run",
+        "stdinInput": "",
+        "provider": "local"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/execute")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let parsed: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(parsed["success"], true);
+    assert_eq!(parsed["output"], "strict-local\n");
+    assert!(parsed["usedProvider"]
+        .as_str()
+        .unwrap()
+        .starts_with("local ("));
 }

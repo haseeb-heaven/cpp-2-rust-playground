@@ -99,18 +99,51 @@ int main() {
     await page.waitForTimeout(500);
 
     await page.getByTestId("provider-select").selectOption("local");
+    await page.getByTestId("run-source-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("155.664", {
+      timeout: 15000
+    });
+    await expect(page.getByTestId("used-provider-pill")).toContainText("local (");
+
     await page.getByTestId("run-rust-button").click();
     await expect(page.getByTestId("program-output")).toContainText("155.664", {
       timeout: 15000
     });
-    await expect(page.getByTestId("used-provider-pill")).toContainText("local");
+    await expect(page.getByTestId("used-provider-pill")).toContainText("local (");
 
     await page.getByTestId("provider-select").selectOption("online");
     await page.getByTestId("run-source-button").click();
     await expect(page.getByTestId("program-output")).toContainText("155.664", {
       timeout: 15000
     });
-    await expect(page.getByTestId("used-provider-pill")).toContainText("online");
+    await expect(page.getByTestId("used-provider-pill")).toContainText("online (");
+  });
+
+  test("converts and executes C forward declaration IsValidNumber locally in C and Rust", async ({
+    page
+  }) => {
+    await page.goto("/");
+
+    await page.getByTestId("examples-button").click();
+    await expect(page.getByTestId("examples-modal")).toBeVisible();
+    await page.getByTestId("example-c-base-validator").click();
+
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "fn IsValidNumber(p_input: &str, base: i32) -> bool"
+    );
+
+    await page.getByTestId("provider-select").selectOption("local");
+    await page.getByTestId("run-source-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("1A3F base 16: valid", {
+      timeout: 15000
+    });
+    await expect(page.getByTestId("used-provider-pill")).toContainText("local (");
+
+    await page.getByTestId("run-rust-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("19Z base 10: invalid", {
+      timeout: 15000
+    });
+    await expect(page.getByTestId("used-provider-pill")).toContainText("local (");
   });
 
   test("supports Manual Mode with Convert button and Very Complex BFS Graph example", async ({

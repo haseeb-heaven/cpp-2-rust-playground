@@ -368,5 +368,50 @@ int main() {
             .to_string(),
             default_stdin: String::new(),
         },
+        CodeExample {
+            identifier: "c-base-validator".to_string(),
+            title: "Number Base Validator (C)".to_string(),
+            category: "String & Validation".to_string(),
+            difficulty: "Hard".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Uses a C forward declaration, char* pointer parameter, ctype checks, and base validation.".to_string(),
+            source_code: r#"#include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+#include <ctype.h>
+
+bool IsValidNumber(char *p_input, int base);
+
+int main() {
+    if (IsValidNumber("1A3F", 16)) {
+        printf("1A3F base 16: valid\n");
+    }
+    if (!IsValidNumber("19Z", 10)) {
+        printf("19Z base 10: invalid\n");
+    }
+    return 0;
+}
+
+bool IsValidNumber(char *p_input, int base) {
+    if (base < 2 || base > 36) return false;
+    int len = strlen(p_input);
+    if (len == 0) return false;
+    for (int i = 0; i < len; i++) {
+        char ch = toupper(p_input[i]);
+        int digit = 0;
+        if (isdigit(ch)) {
+            digit = ch - '0';
+        } else if (isalpha(ch)) {
+            digit = ch - 'A' + 10;
+        } else {
+            return false;
+        }
+        if (digit >= base) return false;
+    }
+    return true;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
     ]
 }

@@ -14,6 +14,18 @@ static CLASS_OR_STRUCT_REGEX: Lazy<Regex> =
 static FUNCTION_DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:<>,\s*&]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?\{\s*$"#).unwrap()
 });
+static FUNCTION_PROTOTYPE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:<>,\s*&]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?;\s*$"#).unwrap()
+});
+static SINGLE_LINE_IF_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^if\s*\((.+)\)\s+(.+;)\s*$"#).unwrap()
+});
+static ARRAY_INIT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(const\s+)?([A-Za-z_][A-Za-z0-9_:]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*\]\s*=\s*\{(.+)\}\s*;\s*$"#).unwrap()
+});
+static CHAR_BUFFER_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^char\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*\d+\s*\]\s*;\s*$"#).unwrap()
+});
 static FOR_RANGE_UP_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^for\s*\(\s*(int|size_t|long|auto)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);\s*[A-Za-z_][A-Za-z0-9_]*\s*(<=|<)\s*([^;]+);\s*[^)]+\)\s*\{\s*$"#).unwrap()
 });
@@ -104,6 +116,7 @@ pub struct TranslatorState {
     pub hashset_variables: HashSet<String>,
     pub queue_variables: HashSet<String>,
     pub string_variables: HashSet<String>,
+    pub str_slice_variables: HashSet<String>,
     pub float_vector_variables: HashSet<String>,
     pub option_variables: HashSet<String>,
     pub option_functions: HashSet<String>,
@@ -135,6 +148,7 @@ impl TranslatorState {
             hashset_variables: HashSet::new(),
             queue_variables: HashSet::new(),
             string_variables: HashSet::new(),
+            str_slice_variables: HashSet::new(),
             float_vector_variables: HashSet::new(),
             option_variables: HashSet::new(),
             option_functions: HashSet::new(),
@@ -149,6 +163,7 @@ impl TranslatorState {
         self.hashset_variables.clear();
         self.queue_variables.clear();
         self.string_variables.clear();
+        self.str_slice_variables.clear();
         self.float_vector_variables.clear();
         self.option_variables.clear();
     }
@@ -159,6 +174,7 @@ impl TranslatorState {
         self.hashset_variables.remove(variable_name);
         self.queue_variables.remove(variable_name);
         self.string_variables.remove(variable_name);
+        self.str_slice_variables.remove(variable_name);
         self.float_vector_variables.remove(variable_name);
         self.option_variables.remove(variable_name);
 
@@ -170,6 +186,8 @@ impl TranslatorState {
             self.queue_variables.insert(variable_name.to_string());
         } else if rust_type == "String" {
             self.string_variables.insert(variable_name.to_string());
+        } else if rust_type == "&str" {
+            self.str_slice_variables.insert(variable_name.to_string());
         } else if rust_type == "Vec<f32>" || rust_type == "Vec<f64>" {
             self.float_vector_variables
                 .insert(variable_name.to_string());
@@ -187,6 +205,9 @@ pub fn map_cpp_type_to_rust(raw_type: &str, state: &mut TranslatorState) -> Stri
         .trim();
 
     if let Some(inner) = cleaned.strip_suffix('*').map(|value| value.trim()) {
+        if inner == "char" {
+            return "String".to_string();
+        }
         let mapped_inner = map_cpp_type_to_rust(inner, state);
         return format!("Box<{}>", mapped_inner);
     }
@@ -544,12 +565,43 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         .to_string();
 
     output = transform_outside_string_literals(&output, |segment| {
+        let mut updated = segment.to_string();
+        let strlen_regex = Regex::new(r"\bstrlen\s*\(([^)]+)\)").unwrap();
+        updated = strlen_regex
+            .replace_all(&updated, "($1.len() as i32)")
+            .to_string();
+        let ctype_funcs = [
+            ("isdigit", "is_ascii_digit"),
+            ("isalpha", "is_ascii_alphabetic"),
+            ("isalnum", "is_ascii_alphanumeric"),
+            ("toupper", "to_ascii_uppercase"),
+            ("tolower", "to_ascii_lowercase"),
+        ];
+        for (c_func, rust_method) in ctype_funcs {
+            let func_regex =
+                Regex::new(&format!(r"\b{}\s*\(([^()]+)\)", c_func)).unwrap();
+            updated = func_regex
+                .replace_all(&updated, format!("($1).{}()", rust_method))
+                .to_string();
+        }
+        let char_sub_regex =
+            Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*-\s*'([^'\\])'").unwrap();
+        updated = char_sub_regex
+            .replace_all(&updated, "($1 as i32) - ('$2' as i32)")
+            .to_string();
+        updated
+    });
+
+    output = transform_outside_string_literals(&output, |segment| {
         INDEX_ACCESS_REGEX
             .replace_all(segment, |captures: &regex::Captures| {
                 let target = captures.get(1).unwrap().as_str();
                 let index_expr = captures.get(2).unwrap().as_str().trim();
                 if target == "vec" || index_expr.ends_with("usize") {
                     return format!("{}[{}]", target, index_expr);
+                }
+                if state.str_slice_variables.contains(target) || state.string_variables.contains(target) {
+                    return format!("({}.as_bytes()[({}) as usize] as char)", target, index_expr);
                 }
                 if state.hashmap_variables.contains(target) {
                     if index_expr.starts_with('"') || index_expr.starts_with('&') {
@@ -591,19 +643,28 @@ fn translate_parameters(raw_parameters: &str, state: &mut TranslatorState) -> St
             if tokens.len() < 2 {
                 return None;
             }
-            let parameter_name = tokens
-                .last()
-                .unwrap()
-                .trim_start_matches('&')
-                .trim_start_matches('*');
-            let raw_type = tokens[..tokens.len() - 1].join(" ");
-            let rust_type = map_cpp_type_to_rust(&raw_type, state);
+            let last_token = tokens.last().unwrap();
+            let pointer_prefix_count = last_token
+                .chars()
+                .take_while(|ch| *ch == '*' || *ch == '&')
+                .count();
+            let attached_sigils = &last_token[..pointer_prefix_count];
+            let parameter_name = &last_token[pointer_prefix_count..];
+            let raw_type = format!("{} {}", tokens[..tokens.len() - 1].join(" "), attached_sigils)
+                .trim()
+                .to_string();
+            let mut rust_type = map_cpp_type_to_rust(&raw_type, state);
+            if (raw_type.contains("char*") || raw_type.contains("char *")) && rust_type == "String" {
+                rust_type = "&str".to_string();
+            }
             state
                 .method_parameter_names
                 .insert(parameter_name.to_string());
             state.register_variable_type(parameter_name, &rust_type);
 
-            if parameter.contains('&') && !parameter.contains("const") {
+            if rust_type == "&str" {
+                Some(format!("{}: &str", parameter_name))
+            } else if parameter.contains('&') && !parameter.contains("const") {
                 Some(format!("{}: &mut {}", parameter_name, rust_type))
             } else if parameter.contains('&') {
                 Some(format!("{}: &{}", parameter_name, rust_type))
@@ -852,7 +913,17 @@ pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> Str
     }
 
     if state.inside_struct_name.is_some() && !state.inside_inline_method {
-        if let Some(captures) = FUNCTION_DECL_REGEX.captures(trimmed) {
+        if state.current_brace_depth == 0 {
+        if let Some(captures) = FUNCTION_PROTOTYPE_REGEX.captures(trimmed) {
+            let return_type_raw = captures.get(1).unwrap().as_str().trim();
+            let _function_name = captures.get(2).unwrap().as_str();
+            if !matches!(return_type_raw, "return" | "delete" | "throw") && !trimmed.contains('=') {
+                return format!("{}// Forward declaration: {}", leading_whitespace, trimmed);
+            }
+        }
+    }
+
+    if let Some(captures) = FUNCTION_DECL_REGEX.captures(trimmed) {
             let return_type_raw = captures.get(1).unwrap().as_str();
             let function_name = captures.get(2).unwrap().as_str();
             let params_raw = captures.get(3).unwrap().as_str();
@@ -950,6 +1021,16 @@ pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> Str
     if state.inside_switch_block && trimmed == "}" {
         state.inside_switch_block = false;
         return format!("{}}}", leading_whitespace);
+    }
+
+    if state.current_brace_depth == 0 {
+        if let Some(captures) = FUNCTION_PROTOTYPE_REGEX.captures(trimmed) {
+            let return_type_raw = captures.get(1).unwrap().as_str().trim();
+            let _function_name = captures.get(2).unwrap().as_str();
+            if !matches!(return_type_raw, "return" | "delete" | "throw") && !trimmed.contains('=') {
+                return format!("{}// Forward declaration: {}", leading_whitespace, trimmed);
+            }
+        }
     }
 
     if let Some(captures) = FUNCTION_DECL_REGEX.captures(trimmed) {
@@ -1221,6 +1302,38 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
 
     if ELSE_REGEX.is_match(trimmed) {
         return "} else {".to_string();
+    }
+
+    if let Some(captures) = SINGLE_LINE_IF_REGEX.captures(trimmed) {
+        let condition = translate_expression_with_state(captures.get(1).unwrap().as_str(), state);
+        let inline_stmt = translate_statement_line(captures.get(2).unwrap().as_str(), state);
+        return format!("if {} {{ {} }}", condition, inline_stmt);
+    }
+
+    if let Some(captures) = CHAR_BUFFER_REGEX.captures(trimmed) {
+        let variable_name = captures.get(1).unwrap().as_str();
+        state.register_variable_type(variable_name, "String");
+        return format!("let mut {}: String = String::new();", variable_name);
+    }
+
+    if let Some(captures) = ARRAY_INIT_REGEX.captures(trimmed) {
+        let is_const = captures.get(1).is_some();
+        let raw_type = captures.get(2).unwrap().as_str();
+        let variable_name = captures.get(3).unwrap().as_str();
+        let items_raw = captures.get(4).unwrap().as_str();
+        let rust_elem_type = map_cpp_type_to_rust(raw_type, state);
+        let rust_vec_type = format!("Vec<{}>", rust_elem_type);
+        state.register_variable_type(variable_name, &rust_vec_type);
+        let translated_items = split_top_level_comma(items_raw)
+            .into_iter()
+            .map(|item| translate_expression_with_state(item, state))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mutability = if is_const { "" } else { "mut " };
+        return format!(
+            "let {}{}: {} = vec![{}];",
+            mutability, variable_name, rust_vec_type, translated_items
+        );
     }
 
     if let Some(captures) = IF_REGEX.captures(trimmed) {

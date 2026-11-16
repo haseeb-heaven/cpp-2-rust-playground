@@ -256,4 +256,50 @@ int main() {
         assert!(result.generated_rust_code.contains("fvec.push(10.5_f32);"));
         assert!(result.generated_rust_code.contains("for vec in &mut fvec {"));
     }
+
+    #[test]
+    fn converts_forward_prototype_char_pointer_and_single_line_if() {
+        let c_source = r#"#include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+#include <ctype.h>
+
+bool IsValidNumber(char *p_input, int base);
+
+int main() {
+    if (IsValidNumber("1A3F", 16)) {
+        printf("valid\n");
+    }
+    return 0;
+}
+
+bool IsValidNumber(char *p_input, int base) {
+    if (base < 2 || base > 36) return false;
+    int len = strlen(p_input);
+    if (len == 0) return false;
+    for (int i = 0; i < len; i++) {
+        char ch = toupper(p_input[i]);
+        int digit = 0;
+        if (isdigit(ch)) {
+            digit = ch - '0';
+        } else if (isalpha(ch)) {
+            digit = ch - 'A' + 10;
+        } else {
+            return false;
+        }
+        if (digit >= base) return false;
+    }
+    return true;
+}"#;
+        let result = convert_source_to_rust(c_source, &SourceLanguage::C);
+        assert!(result
+            .generated_rust_code
+            .contains("// Forward declaration: bool IsValidNumber(char *p_input, int base);"));
+        assert!(result
+            .generated_rust_code
+            .contains("fn IsValidNumber(p_input: &str, base: i32) -> bool {"));
+        assert!(result
+            .generated_rust_code
+            .contains("if base < 2 || base > 36 { return false; }"));
+    }
 }
