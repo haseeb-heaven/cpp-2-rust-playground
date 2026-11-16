@@ -1,8 +1,10 @@
 import type {
   CodeExample,
+  CompilerAvailability,
   ConversionResponse,
   ExecutionLanguage,
   ExecutionMode,
+  ExecutionProvider,
   ExecutionResponse,
   SourceLanguage
 } from "../types/studio";
@@ -32,12 +34,13 @@ export async function executeProgramCode(
   code: string,
   language: ExecutionLanguage,
   mode: ExecutionMode,
-  stdinInput: string
+  stdinInput: string,
+  provider: ExecutionProvider
 ): Promise<ExecutionResponse> {
   const response = await fetch(`${API_BASE_URL}/api/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, language, mode, stdinInput })
+    body: JSON.stringify({ code, language, mode, stdinInput, provider })
   });
 
   if (!response.ok) {
@@ -45,6 +48,14 @@ export async function executeProgramCode(
   }
 
   return (await response.json()) as ExecutionResponse;
+}
+
+export async function fetchCompilerAvailability(): Promise<CompilerAvailability> {
+  const response = await fetch(`${API_BASE_URL}/api/compilers`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch compiler availability (${response.status})`);
+  }
+  return (await response.json()) as CompilerAvailability;
 }
 
 export async function fetchPremadeExamples(): Promise<CodeExample[]> {

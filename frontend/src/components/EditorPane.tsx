@@ -14,20 +14,34 @@ interface EditorPaneProps {
   onChange: (nextValue: string) => void;
   theme: EditorTheme;
   highlightedLines: number[];
+  errorLines?: number[];
   onCursorLineChange?: (lineNumber: number) => void;
   badgeText?: string;
   testId: string;
 }
 
-function createLineHighlightExtension(highlightedLines: number[]) {
-  const lineDecoration = Decoration.line({ class: "cm-mapped-line-highlight" });
+function createLineHighlightExtension(highlightedLines: number[], errorLines: number[]) {
+  const mappedLineDecoration = Decoration.line({ class: "cm-mapped-line-highlight" });
+  const errorLineDecoration = Decoration.line({ class: "cm-error-line-highlight" });
 
   return StateField.define({
     create(state) {
-      return buildDecorations(state.doc, highlightedLines, lineDecoration);
+      return buildDecorations(
+        state.doc,
+        highlightedLines,
+        errorLines,
+        mappedLineDecoration,
+        errorLineDecoration
+      );
     },
     update(_decorations, transaction) {
-      return buildDecorations(transaction.state.doc, highlightedLines, lineDecoration);
+      return buildDecorations(
+        transaction.state.doc,
+        highlightedLines,
+        errorLines,
+        mappedLineDecoration,
+        errorLineDecoration
+      );
     },
     provide: (field) => EditorView.decorations.from(field)
   });
@@ -36,13 +50,21 @@ function createLineHighlightExtension(highlightedLines: number[]) {
 function buildDecorations(
   document: { lines: number; line: (number: number) => { from: number } },
   highlightedLines: number[],
-  decoration: Decoration
+  errorLines: number[],
+  mappedDecoration: Decoration,
+  errorDecoration: Decoration
 ) {
   const ranges = [];
   for (const lineNumber of highlightedLines) {
     if (lineNumber >= 1 && lineNumber <= document.lines) {
       const lineInfo = document.line(lineNumber);
-      ranges.push(decoration.range(lineInfo.from));
+      ranges.push(mappedDecoration.range(lineInfo.from));
+    }
+  }
+  for (const lineNumber of errorLines) {
+    if (lineNumber >= 1 && lineNumber <= document.lines) {
+      const lineInfo = document.line(lineNumber);
+      ranges.push(errorDecoration.range(lineInfo.from));
     }
   }
   return Decoration.set(ranges, true);
@@ -55,13 +77,14 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   onChange,
   theme,
   highlightedLines,
+  errorLines = [],
   onCursorLineChange,
   badgeText,
   testId
 }) => {
   const extensions = useMemo(() => {
     const languageExtension = language === "cpp" ? cpp() : rust();
-    const highlightExtension = createLineHighlightExtension(highlightedLines);
+    const highlightExtension = createLineHighlightExtension(highlightedLines, errorLines);
     const cursorListener = EditorView.updateListener.of((update) => {
       if (update.selectionSet && onCursorLineChange) {
         const cursorPosition = update.state.selection.main.head;
@@ -70,7 +93,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
       }
     });
     return [languageExtension, highlightExtension, cursorListener];
-  }, [language, highlightedLines, onCursorLineChange]);
+  }, [language, highlightedLines, errorLines, onCursorLineChange]);
 
   return (
     <section className="editor-pane" data-testid={testId}>

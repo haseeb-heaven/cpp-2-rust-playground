@@ -1,14 +1,94 @@
 use crate::models::{ConversionDiagnostic, DiagnosticSeverity, ErrorCategory};
+use once_cell::sync::Lazy;
+use regex::Regex;
+use std::collections::HashSet;
+
+static PREPROCESSOR_KEYWORD_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^#\s*([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+static VAR_DECL_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(?:const\s+)?(?:std::)?[A-Za-z_][A-Za-z0-9_:<>,\s]*(?:\s*\*|\s*&)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;|\()",
+    )
+    .unwrap()
+});
+static FOR_EACH_TARGET_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^for\s*\(\s*[^:]+:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{?\s*$").unwrap()
+});
+static FOR_LOOP_VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^for\s*\(\s*(?:int|size_t|long|auto)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap()
+});
+
+const VALID_PREPROCESSOR_DIRECTIVES: &[&str] = &[
+    "include", "define", "undef", "if", "ifdef", "ifndef", "else", "elif", "endif", "pragma",
+    "error", "warning", "line",
+];
+
+fn levenshtein_distance(first: &str, second: &str) -> usize {
+    let first_chars: Vec<char> = first.chars().collect();
+    let second_chars: Vec<char> = second.chars().collect();
+    let mut previous_row: Vec<usize> = (0..=second_chars.len()).collect();
+
+    for (first_index, first_char) in first_chars.iter().enumerate() {
+        let mut current_row = vec![first_index + 1];
+        for (second_index, second_char) in second_chars.iter().enumerate() {
+            let cost = if first_char == second_char { 0 } else { 1 };
+            let deletion = previous_row[second_index + 1] + 1;
+            let insertion = current_row[second_index] + 1;
+            let substitution = previous_row[second_index] + cost;
+            current_row.push(deletion.min(insertion).min(substitution));
+        }
+        previous_row = current_row;
+    }
+
+    previous_row[second_chars.len()]
+}
+
+fn find_closest_match<'a>(target: &str, candidates: &'a HashSet<String>) -> Option<&'a str> {
+    candidates
+        .iter()
+        .filter_map(|candidate| {
+            let distance = levenshtein_distance(target, candidate);
+            if distance <= 2 {
+                Some((distance, candidate.as_str()))
+            } else {
+                None
+            }
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate)
+}
 
 pub fn analyze_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagnostic> {
     let mut diagnostics = Vec::new();
     let mut brace_stack: Vec<usize> = Vec::new();
+    let mut declared_identifiers: HashSet<String> = HashSet::new();
 
     for (zero_based_index, raw_line) in source_lines.iter().enumerate() {
         let line_number = zero_based_index + 1;
         let trimmed = raw_line.trim();
 
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+
+        if trimmed.starts_with('#') {
+            if let Some(captures) = PREPROCESSOR_KEYWORD_REGEX.captures(trimmed) {
+                let directive = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+                if !VALID_PREPROCESSOR_DIRECTIVES.contains(&directive) {
+                    let suggestion = if levenshtein_distance(directive, "include") <= 2 {
+                        Some(trimmed.replacen(directive, "include", 1))
+                    } else {
+                        Some("Use a valid C/C++ preprocessor directive such as '#include' or '#define'.".to_string())
+                    };
+                    diagnostics.push(ConversionDiagnostic {
+                        line_number,
+                        severity: DiagnosticSeverity::Error,
+                        category: ErrorCategory::Syntax,
+                        message: format!("Unknown preprocessor directive '#{}'.", directive),
+                        suggested_fix: suggestion.map(|fix| format!("Did you mean '{}'?", fix)),
+                    });
+                }
+            }
             continue;
         }
 
@@ -24,6 +104,44 @@ pub fn analyze_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagno
                         message: "Unexpected closing brace '}' with no matching opening brace."
                             .to_string(),
                         suggested_fix: Some("Remove the extra '}' or add a matching '{'.".to_string()),
+                    });
+                }
+            }
+        }
+
+        if let Some(captures) = FOR_LOOP_VAR_REGEX.captures(trimmed) {
+            if let Some(loop_var) = captures.get(1) {
+                declared_identifiers.insert(loop_var.as_str().to_string());
+            }
+        } else if let Some(captures) = VAR_DECL_NAME_REGEX.captures(trimmed) {
+            if let Some(identifier) = captures.get(1) {
+                let name = identifier.as_str();
+                if !matches!(name, "main" | "if" | "for" | "while" | "switch" | "return") {
+                    declared_identifiers.insert(name.to_string());
+                }
+            }
+        }
+
+        if let Some(captures) = FOR_EACH_TARGET_REGEX.captures(trimmed) {
+            if let Some(collection_match) = captures.get(1) {
+                let collection_name = collection_match.as_str();
+                if !declared_identifiers.is_empty()
+                    && !declared_identifiers.contains(collection_name)
+                {
+                    let suggestion = find_closest_match(collection_name, &declared_identifiers)
+                        .map(|closest| format!("Did you mean '{}'?", closest))
+                        .unwrap_or_else(|| {
+                            format!("Declare '{}' before iterating over it.", collection_name)
+                        });
+                    diagnostics.push(ConversionDiagnostic {
+                        line_number,
+                        severity: DiagnosticSeverity::Error,
+                        category: ErrorCategory::Compilation,
+                        message: format!(
+                            "Undeclared identifier '{}' in range-based for loop.",
+                            collection_name
+                        ),
+                        suggested_fix: Some(suggestion),
                     });
                 }
             }

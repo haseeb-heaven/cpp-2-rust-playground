@@ -13,11 +13,21 @@ import {
   Sparkles,
   Upload
 } from "lucide-react";
-import type { EditorTheme, ExecutionLanguage, ExecutionMode, SourceLanguage } from "../types/studio";
+import type {
+  CompilerAvailability,
+  EditorTheme,
+  ExecutionLanguage,
+  ExecutionMode,
+  ExecutionProvider,
+  SourceLanguage
+} from "../types/studio";
 
 interface ToolbarProps {
   sourceLanguage: SourceLanguage;
   onSourceLanguageChange: (language: SourceLanguage) => void;
+  executionProvider: ExecutionProvider;
+  onExecutionProviderChange: (provider: ExecutionProvider) => void;
+  compilerAvailability: CompilerAvailability | null;
   theme: EditorTheme;
   onThemeChange: (theme: EditorTheme) => void;
   isDiffViewOpen: boolean;
@@ -41,6 +51,9 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   sourceLanguage,
   onSourceLanguageChange,
+  executionProvider,
+  onExecutionProviderChange,
+  compilerAvailability,
   theme,
   onThemeChange,
   isDiffViewOpen,
@@ -210,6 +223,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       </div>
 
       <div className="toolbar-group toolbar-execution">
+        <select
+          className="theme-select"
+          value={executionProvider}
+          onChange={(event) =>
+            onExecutionProviderChange(event.target.value as ExecutionProvider)
+          }
+          aria-label="Compiler provider"
+          title={
+            compilerAvailability
+              ? `Local compilers — C: ${compilerAvailability.cCompiler ?? "unavailable"}, C++: ${compilerAvailability.cppCompiler ?? "unavailable"}, Rust: ${compilerAvailability.rustCompiler ?? "unavailable"}`
+              : "Choose Local (with Online fallback) or Online JDoodle compiler"
+          }
+          data-testid="provider-select"
+        >
+          <option value="local">Local (Auto-Fallback)</option>
+          <option value="online">Online (JDoodle)</option>
+        </select>
+
         <button
           type="button"
           className="exec-button compile-source"

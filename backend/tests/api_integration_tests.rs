@@ -85,13 +85,35 @@ async fn convert_endpoint_translates_cpp_to_rust() {
 }
 
 #[tokio::test]
+async fn compilers_endpoint_returns_availability() {
+    let app = create_application_router(test_configuration());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/compilers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let parsed: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert!(parsed.get("cAvailable").is_some());
+    assert!(parsed.get("cppAvailable").is_some());
+    assert!(parsed.get("rustAvailable").is_some());
+}
+
+#[tokio::test]
 async fn execute_endpoint_reports_missing_credentials_cleanly() {
     let app = create_application_router(test_configuration());
     let payload = json!({
         "code": "fn main() { println!(\"ok\"); }",
         "language": "rust",
         "mode": "run",
-        "stdinInput": ""
+        "stdinInput": "",
+        "provider": "online"
     });
 
     let response = app

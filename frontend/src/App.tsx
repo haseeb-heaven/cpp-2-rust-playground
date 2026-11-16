@@ -8,6 +8,7 @@ import { ShortcutsModal } from "./components/ShortcutsModal";
 import {
   convertSourceCode,
   executeProgramCode,
+  fetchCompilerAvailability,
   fetchPremadeExamples
 } from "./services/apiClient";
 import { mergeIncrementalRustEdits } from "./utils/incrementalMerge";
@@ -19,10 +20,12 @@ import {
 } from "./utils/storageUtility";
 import type {
   CodeExample,
+  CompilerAvailability,
   ConversionDiagnostic,
   EditorTheme,
   ExecutionLanguage,
   ExecutionMode,
+  ExecutionProvider,
   ExecutionResponse,
   LineMapping,
   SourceLanguage
@@ -91,6 +94,10 @@ export const App: React.FC = () => {
   const [highlightedRustLines, setHighlightedRustLines] = useState<number[]>([]);
 
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
+  const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("local");
+  const [compilerAvailability, setCompilerAvailability] = useState<CompilerAvailability | null>(
+    null
+  );
   const [executionResult, setExecutionResult] = useState<ExecutionResponse | null>(null);
   const [lastExecutedLabel, setLastExecutedLabel] = useState<string | null>(null);
   const [saveStatusMessage, setSaveStatusMessage] = useState<string | null>(null);
@@ -103,6 +110,11 @@ export const App: React.FC = () => {
   useEffect(() => {
     fetchPremadeExamples()
       .then((examples) => setPremadeExamples(examples))
+      .catch(() => {
+        // Fallback silently if backend is not yet reachable
+      });
+    fetchCompilerAvailability()
+      .then((availability) => setCompilerAvailability(availability))
       .catch(() => {
         // Fallback silently if backend is not yet reachable
       });
@@ -206,7 +218,13 @@ export const App: React.FC = () => {
       setLastExecutedLabel(`${modeLabel} ${languageLabel}`);
 
       try {
-        const result = await executeProgramCode(codeToRun, language, mode, stdinInput);
+        const result = await executeProgramCode(
+          codeToRun,
+          language,
+          mode,
+          stdinInput,
+          executionProvider
+        );
         setExecutionResult(result);
       } catch (error: unknown) {
         const errorMessage =
@@ -228,13 +246,14 @@ export const App: React.FC = () => {
               suggestedFix: "Ensure the Rust backend server is running on port 8080."
             }
           ],
-          timedOut: false
+          timedOut: false,
+          usedProvider: executionProvider
         });
       } finally {
         setIsExecuting(false);
       }
     },
-    [rustCode, sourceCode, stdinInput]
+    [rustCode, sourceCode, stdinInput, executionProvider]
   );
 
   useEffect(() => {
@@ -374,6 +393,10 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  const sourceErrorLines = conversionDiagnostics
+    .filter((diag) => diag.severity === "error")
+    .map((diag) => diag.lineNumber);
+
   const sourceEditorPane = (
     <EditorPane
       title={sourceLanguage === "c" ? "C Source" : "C++ Source"}
@@ -382,6 +405,7 @@ export const App: React.FC = () => {
       onChange={setSourceCode}
       theme={theme}
       highlightedLines={highlightedSourceLines}
+      errorLines={sourceErrorLines}
       onCursorLineChange={handleSourceCursorLine}
       badgeText={sourceLanguage.toUpperCase()}
       testId="source-editor-pane"
@@ -410,6 +434,9 @@ export const App: React.FC = () => {
       <Toolbar
         sourceLanguage={sourceLanguage}
         onSourceLanguageChange={setSourceLanguage}
+        executionProvider={executionProvider}
+        onExecutionProviderChange={setExecutionProvider}
+        compilerAvailability={compilerAvailability}
         theme={theme}
         onThemeChange={setTheme}
         isDiffViewOpen={isDiffViewOpen}

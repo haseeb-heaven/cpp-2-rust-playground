@@ -65,6 +65,9 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
 
         {executionResult && (
           <div className="execution-metrics">
+            <span className="provider-pill" data-testid="used-provider-pill">
+              {executionResult.usedProvider}
+            </span>
             <span className={`status-pill ${executionResult.success ? "success" : "failure"}`}>
               {executionResult.success ? (
                 <CheckCircle2 size={13} />

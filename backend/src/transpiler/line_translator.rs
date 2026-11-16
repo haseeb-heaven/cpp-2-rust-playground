@@ -225,6 +225,9 @@ pub fn translate_expression(expression: &str) -> String {
         output = format!("Box::new({})", rest.trim());
     }
 
+    let float_suffix_regex = Regex::new(r"\b(\d+\.\d+)[fF]\b").unwrap();
+    output = float_suffix_regex.replace_all(&output, "${1}_f32").to_string();
+
     output
 }
 
@@ -378,6 +381,10 @@ pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> Str
             "i64"
         };
         return format!("{}const {}: {} = {};", leading_whitespace, name, rust_type, value);
+    }
+
+    if trimmed.starts_with('#') {
+        return format!("{}// [Preprocessor] {}", leading_whitespace, trimmed);
     }
 
     if let Some(captures) = TEMPLATE_REGEX.captures(trimmed) {

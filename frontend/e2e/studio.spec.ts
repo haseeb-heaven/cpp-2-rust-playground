@@ -34,19 +34,82 @@ test.describe("RustC-Playground End-to-End Suite", () => {
     await expect(page.getByTestId("save-button")).toContainText("Saved!");
   });
 
-  test("runs C++ and Rust code via JDoodle Live API", async ({ page }) => {
+  test("catches misspelled #inlcude and undeclared fcvec identifier in diagnostics", async ({
+    page
+  }) => {
     await page.goto("/");
 
-    await page.getByTestId("run-source-button").click();
-    await expect(page.getByTestId("program-output")).toContainText(
-      "RustC-Playground step 0",
-      { timeout: 15000 }
-    );
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill(`#inlcude <iostream>
+#include <vector>
 
+int main(){
+    std::vector<float> fvec;
+    fvec.push_back(10.5);
+    fvec.push_back(30.5);
+    fvec.push_back(155.664);
+    for(auto& vec: fcvec){
+        std::cout << vec << std::endl;
+    }
+    return 0;
+}`);
+
+    await page.waitForTimeout(500);
+
+    const rustEditorText = await page.getByTestId("rust-editor-pane").innerText();
+    expect(rustEditorText).toContain("// [Preprocessor] #inlcude <iostream>");
+    expect(rustEditorText).toContain("let mut fvec: Vec<f32> = Vec::new();");
+
+    await page.getByTestId("diagnostics-tab").click();
+    const diagnosticsList = page.getByTestId("diagnostics-list");
+    await expect(diagnosticsList).toContainText("#inlcude");
+    await expect(diagnosticsList).toContainText("Did you mean '#include <iostream>'?");
+    await expect(diagnosticsList).toContainText("fcvec");
+    await expect(diagnosticsList).toContainText("Did you mean 'fvec'?");
+  });
+
+  test("runs valid float vector C++ and Rust locally and via JDoodle online API", async ({
+    page
+  }) => {
+    await page.goto("/");
+
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await sourceEditorContent.fill(`#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<float> fvec;
+    fvec.push_back(10.5);
+    fvec.push_back(30.5);
+    fvec.push_back(155.664);
+    for (auto& vec : fvec) {
+        std::cout << vec << std::endl;
+    }
+    return 0;
+}`);
+
+    await page.waitForTimeout(500);
+
+    await page.getByTestId("provider-select").selectOption("local");
     await page.getByTestId("run-rust-button").click();
-    await expect(page.getByTestId("program-output")).toContainText(
-      "RustC-Playground step 0",
-      { timeout: 15000 }
-    );
+    await expect(page.getByTestId("program-output")).toContainText("155.664", {
+      timeout: 15000
+    });
+    await expect(page.getByTestId("used-provider-pill")).toContainText("local");
+
+    await page.getByTestId("provider-select").selectOption("online");
+    await page.getByTestId("run-source-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("155.664", {
+      timeout: 15000
+    });
+    await expect(page.getByTestId("used-provider-pill")).toContainText("online");
   });
 });

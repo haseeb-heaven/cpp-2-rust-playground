@@ -1,6 +1,7 @@
 export type SourceLanguage = "c" | "cpp";
 export type ExecutionLanguage = "c" | "cpp" | "rust";
 export type ExecutionMode = "compile" | "run";
+export type ExecutionProvider = "local" | "online";
 export type EditorTheme = "dark" | "light" | "midnight";
 export type DiagnosticSeverity = "error" | "warning" | "info";
 export type ErrorCategory =
@@ -47,6 +48,16 @@ export interface ExecutionResponse {
   executionTimeMilliseconds: number;
   diagnostics: ConversionDiagnostic[];
   timedOut: boolean;
+  usedProvider: string;
+}
+
+export interface CompilerAvailability {
+  cAvailable: boolean;
+  cCompiler: string | null;
+  cppAvailable: boolean;
+  cppCompiler: string | null;
+  rustAvailable: boolean;
+  rustCompiler: string | null;
 }
 
 export interface CodeExample {

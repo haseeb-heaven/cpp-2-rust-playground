@@ -1,7 +1,10 @@
 use crate::config::ApplicationConfiguration;
 use crate::examples_catalog::get_premade_examples;
-use crate::executor::execute_with_jdoodle;
-use crate::models::{CodeExample, ConversionRequest, ConversionResponse, ExecutionRequest, ExecutionResponse};
+use crate::executor::{detect_local_compilers, execute_program};
+use crate::models::{
+    CodeExample, CompilerAvailability, ConversionRequest, ConversionResponse, ExecutionRequest,
+    ExecutionResponse,
+};
 use crate::transpiler::convert_source_to_rust;
 use axum::extract::State;
 use axum::http::Method;
@@ -25,6 +28,7 @@ pub fn create_application_router(configuration: ApplicationConfiguration) -> Rou
 
     Router::new()
         .route("/api/health", get(health_check_handler))
+        .route("/api/compilers", get(compilers_availability_handler))
         .route("/api/examples", get(examples_list_handler))
         .route("/api/convert", post(convert_code_handler))
         .route("/api/execute", post(execute_code_handler))
@@ -37,6 +41,10 @@ async fn health_check_handler() -> Json<Value> {
         "status": "ok",
         "service": "RustC-Playground Backend"
     }))
+}
+
+async fn compilers_availability_handler() -> Json<CompilerAvailability> {
+    Json(detect_local_compilers())
 }
 
 async fn examples_list_handler() -> Json<Vec<CodeExample>> {
@@ -54,6 +62,6 @@ async fn execute_code_handler(
     State(state): State<Arc<ApplicationState>>,
     Json(payload): Json<ExecutionRequest>,
 ) -> Json<ExecutionResponse> {
-    let response = execute_with_jdoodle(&state.configuration, &payload).await;
+    let response = execute_program(&state.configuration, &payload).await;
     Json(response)
 }

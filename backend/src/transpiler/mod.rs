@@ -187,4 +187,71 @@ public:
             .iter()
             .any(|diag| diag.message.contains("gets")));
     }
+
+    #[test]
+    fn catches_misspelled_include_and_undeclared_vector_identifier() {
+        let cpp_source = r#"#inlcude <iostream>
+#include <vector>
+
+int main(){
+
+    std::vector<float> fvec;
+    fvec.push_back(10.5);
+    fvec.push_back(30.5);
+    fvec.push_back(155.664);
+
+    for(auto& vec: fcvec){
+        std::cout << vec << std::endl;
+    }
+
+    return 0;
+}"#;
+        let result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
+
+        assert!(
+            !result.generated_rust_code.contains("\n#inlcude")
+                && !result.generated_rust_code.starts_with("#inlcude"),
+            "Misspelled #inlcude must not leak as raw Rust code"
+        );
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|diag| diag.message.contains("#inlcude")
+                && diag
+                    .suggested_fix
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("#include")));
+        assert!(result
+            .diagnostics
+            .iter()
+            .any(|diag| diag.message.contains("fcvec")
+                && diag
+                    .suggested_fix
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("fvec")));
+    }
+
+    #[test]
+    fn converts_float_vector_and_float_suffix_literals() {
+        let cpp_source = r#"#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<float> fvec;
+    fvec.push_back(10.5f);
+    for (auto& vec : fvec) {
+        std::cout << vec << std::endl;
+    }
+    return 0;
+}"#;
+        let result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
+        assert!(result.diagnostics.is_empty());
+        assert!(result
+            .generated_rust_code
+            .contains("let mut fvec: Vec<f32> = Vec::new();"));
+        assert!(result.generated_rust_code.contains("fvec.push(10.5_f32);"));
+        assert!(result.generated_rust_code.contains("for vec in &mut fvec {"));
+    }
 }

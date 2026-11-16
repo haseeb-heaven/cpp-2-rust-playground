@@ -9,6 +9,21 @@ describe("App component", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/compilers")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                cAvailable: true,
+                cCompiler: "gcc",
+                cppAvailable: true,
+                cppCompiler: "g++",
+                rustAvailable: true,
+                rustCompiler: "rustc"
+              }),
+              { status: 200 }
+            )
+          );
+        }
         if (url.includes("/api/examples")) {
           return Promise.resolve(
             new Response(
@@ -52,7 +67,8 @@ describe("App component", () => {
               cpuTimeSeconds: "0.01",
               executionTimeMilliseconds: 120,
               diagnostics: [],
-              timedOut: false
+              timedOut: false,
+              usedProvider: "local (rustc)"
             }),
             { status: 200 }
           )
@@ -89,6 +105,15 @@ describe("App component", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("program-output")).toHaveTextContent("Hello from Rust!");
+      expect(screen.getByTestId("used-provider-pill")).toHaveTextContent("local (rustc)");
     });
+  });
+
+  it("allows switching between local and online compiler provider", () => {
+    render(<App />);
+    const providerSelect = screen.getByTestId("provider-select") as HTMLSelectElement;
+    expect(providerSelect.value).toBe("local");
+    fireEvent.change(providerSelect, { target: { value: "online" } });
+    expect(providerSelect.value).toBe("online");
   });
 });

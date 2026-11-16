@@ -24,6 +24,13 @@ pub enum ExecutionMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+pub enum ExecutionProvider {
+    Local,
+    Online,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
@@ -87,6 +94,8 @@ pub struct ExecutionRequest {
     pub language: ExecutionLanguage,
     pub mode: ExecutionMode,
     pub stdin_input: String,
+    #[serde(default)]
+    pub provider: Option<ExecutionProvider>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +110,18 @@ pub struct ExecutionResponse {
     pub execution_time_milliseconds: u128,
     pub diagnostics: Vec<ConversionDiagnostic>,
     pub timed_out: bool,
+    pub used_provider: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompilerAvailability {
+    pub c_available: bool,
+    pub c_compiler: Option<String>,
+    pub cpp_available: bool,
+    pub cpp_compiler: Option<String>,
+    pub rust_available: bool,
+    pub rust_compiler: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
