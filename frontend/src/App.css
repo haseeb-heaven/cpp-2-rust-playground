@@ -536,6 +536,25 @@ body,
   gap: 10px;
 }
 
+.difficulty-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px 0;
+  padding: 0;
+  border: none;
+}
+
+.example-category-line {
+  font-size: 11px;
+  color: var(--accent-blue);
+  margin-bottom: 4px;
+}
+
+.convert-now-button {
+  border-color: var(--accent-color);
+}
+
 .example-card {
   text-align: left;
   background: var(--bg-tertiary);

@@ -130,6 +130,7 @@ pub struct CodeExample {
     pub identifier: String,
     pub title: String,
     pub category: String,
+    pub difficulty: String,
     pub source_language: SourceLanguage,
     pub description: String,
     pub source_code: String,

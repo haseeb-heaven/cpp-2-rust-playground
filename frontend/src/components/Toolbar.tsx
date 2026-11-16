@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type {
   CompilerAvailability,
+  ConversionMode,
   EditorTheme,
   ExecutionLanguage,
   ExecutionMode,
@@ -25,6 +26,9 @@ import type {
 interface ToolbarProps {
   sourceLanguage: SourceLanguage;
   onSourceLanguageChange: (language: SourceLanguage) => void;
+  conversionMode: ConversionMode;
+  onConversionModeChange: (mode: ConversionMode) => void;
+  onConvertNow: () => void;
   executionProvider: ExecutionProvider;
   onExecutionProviderChange: (provider: ExecutionProvider) => void;
   compilerAvailability: CompilerAvailability | null;
@@ -51,6 +55,9 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   sourceLanguage,
   onSourceLanguageChange,
+  conversionMode,
+  onConversionModeChange,
+  onConvertNow,
   executionProvider,
   onExecutionProviderChange,
   compilerAvailability,
@@ -97,6 +104,29 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             C++
           </button>
         </div>
+
+        <select
+          className="theme-select"
+          value={conversionMode}
+          onChange={(event) => onConversionModeChange(event.target.value as ConversionMode)}
+          aria-label="Conversion mode"
+          title="Live Mode: line-by-line real-time conversion | Manual Mode: convert on button click"
+          data-testid="conversion-mode-select"
+        >
+          <option value="live">Live Mode</option>
+          <option value="manual">Manual Mode</option>
+        </select>
+
+        <button
+          type="button"
+          className="action-button convert-now-button"
+          onClick={onConvertNow}
+          title="Convert C/C++ to Rust now"
+          data-testid="convert-now-button"
+        >
+          <RefreshCw size={14} />
+          <span>Convert</span>
+        </button>
       </div>
 
       <div className="toolbar-group toolbar-actions">
@@ -237,7 +267,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           }
           data-testid="provider-select"
         >
-          <option value="local">Local (Auto-Fallback)</option>
+          <option value="local">
+            {compilerAvailability &&
+            (compilerAvailability.cppAvailable || compilerAvailability.rustAvailable)
+              ? "Local (Compilers Ready)"
+              : "Local (Auto-Fallback)"}
+          </option>
           <option value="online">Online (JDoodle)</option>
         </select>
 

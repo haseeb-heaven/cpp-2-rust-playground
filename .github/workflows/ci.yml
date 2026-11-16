@@ -1,0 +1,84 @@
+name: RustC-Playground CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-and-equivalence-tests:
+    name: Backend Unit, Integration & C/C++ vs Rust Equivalence Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+
+      - name: Verify C/C++ compilers
+        run: |
+          gcc --version
+          g++ --version
+          rustc --version
+
+      - name: Run Cargo unit, integration, and 12-example equivalence tests
+        working-directory: backend
+        run: cargo test --verbose
+
+  frontend-and-e2e-tests:
+    name: Frontend Unit, Build & Playwright E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run Vitest unit & component tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Type-check and build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install chromium
+
+      - name: Start backend and frontend and run Playwright E2E suite
+        env:
+          JDOODLE_CLIENT_ID: ${{ secrets.JDOODLE_CLIENT_ID }}
+          JDOODLE_CLIENT_SECRET: ${{ secrets.JDOODLE_CLIENT_SECRET }}
+        run: |
+          (cd backend && cargo run) &
+          BACKEND_PID=$!
+          (cd frontend && npm run dev) &
+          FRONTEND_PID=$!
+          trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/api/health >/dev/null && curl -sf http://localhost:5173 >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          cd frontend && npx playwright test e2e/studio.spec.ts --grep-invert "JDoodle"

@@ -12,6 +12,7 @@ import {
   fetchPremadeExamples
 } from "./services/apiClient";
 import { mergeIncrementalRustEdits } from "./utils/incrementalMerge";
+import { buildLineByLineConversionInput } from "./utils/lineByLineFilter";
 import { formatRustCode } from "./utils/rustFormatter";
 import {
   downloadTextFile,
@@ -22,6 +23,7 @@ import type {
   CodeExample,
   CompilerAvailability,
   ConversionDiagnostic,
+  ConversionMode,
   EditorTheme,
   ExecutionLanguage,
   ExecutionMode,
@@ -94,6 +96,8 @@ export const App: React.FC = () => {
   const [highlightedRustLines, setHighlightedRustLines] = useState<number[]>([]);
 
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
+  const [conversionMode, setConversionMode] = useState<ConversionMode>("live");
+  const [activeSourceLineNumber, setActiveSourceLineNumber] = useState<number>(1);
   const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("local");
   const [compilerAvailability, setCompilerAvailability] = useState<CompilerAvailability | null>(
     null
@@ -120,19 +124,15 @@ export const App: React.FC = () => {
       });
   }, []);
 
-  useEffect(() => {
-    if (debounceTimerRef.current !== null) {
-      window.clearTimeout(debounceTimerRef.current);
-    }
-
-    debounceTimerRef.current = window.setTimeout(() => {
+  const runConversion = useCallback(
+    (codeToConvert: string, languageToConvert: SourceLanguage) => {
       if (conversionAbortRef.current) {
         conversionAbortRef.current.abort();
       }
       const abortController = new AbortController();
       conversionAbortRef.current = abortController;
 
-      convertSourceCode(sourceCode, sourceLanguage, abortController.signal)
+      convertSourceCode(codeToConvert, languageToConvert, abortController.signal)
         .then((conversionResult) => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
@@ -151,6 +151,34 @@ export const App: React.FC = () => {
             return;
           }
         });
+    },
+    [lastGeneratedRustCode, rustCode, isRustManuallyEdited]
+  );
+
+  useEffect(() => {
+    if (conversionMode === "manual") {
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      if (conversionAbortRef.current) {
+        conversionAbortRef.current.abort();
+        conversionAbortRef.current = null;
+      }
+      return;
+    }
+
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+    }
+
+    const inputForMode = buildLineByLineConversionInput(
+      sourceCode,
+      activeSourceLineNumber
+    );
+
+    debounceTimerRef.current = window.setTimeout(() => {
+      runConversion(inputForMode, sourceLanguage);
     }, 300);
 
     return () => {
@@ -159,7 +187,15 @@ export const App: React.FC = () => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceCode, sourceLanguage]);
+  }, [sourceCode, sourceLanguage, conversionMode, activeSourceLineNumber]);
+
+  const handleConvertNow = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    runConversion(sourceCode, sourceLanguage);
+  }, [runConversion, sourceCode, sourceLanguage]);
 
   const handleRustEditorChange = useCallback(
     (nextValue: string) => {
@@ -290,6 +326,7 @@ export const App: React.FC = () => {
 
   const handleSourceCursorLine = useCallback(
     (lineNumber: number) => {
+      setActiveSourceLineNumber(lineNumber);
       const mapping = lineMappings.find((item) => item.sourceLine === lineNumber);
       setHighlightedSourceLines([lineNumber]);
       if (mapping) {
@@ -434,6 +471,9 @@ export const App: React.FC = () => {
       <Toolbar
         sourceLanguage={sourceLanguage}
         onSourceLanguageChange={setSourceLanguage}
+        conversionMode={conversionMode}
+        onConversionModeChange={setConversionMode}
+        onConvertNow={handleConvertNow}
         executionProvider={executionProvider}
         onExecutionProviderChange={setExecutionProvider}
         compilerAvailability={compilerAvailability}

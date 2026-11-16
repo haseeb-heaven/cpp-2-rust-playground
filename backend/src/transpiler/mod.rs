@@ -161,7 +161,9 @@ public:
         let result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
         assert!(result.generated_rust_code.contains("pub struct BoxValue<T> {"));
         assert!(result.generated_rust_code.contains("pub value: T,"));
-        assert!(result.generated_rust_code.contains("impl BoxValue {"));
+        assert!(result
+            .generated_rust_code
+            .contains("impl<T: Clone> BoxValue<T> {"));
         assert!(result
             .generated_rust_code
             .contains("pub fn getValue(&self) -> T {"));

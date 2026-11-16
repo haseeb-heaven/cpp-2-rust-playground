@@ -65,8 +65,8 @@ impl Drop for TempDirectoryGuard {
     }
 }
 
-fn check_command_exists(command_name: &str) -> bool {
-    std::process::Command::new(command_name)
+fn check_command_exists(command_or_path: &str) -> bool {
+    std::process::Command::new(command_or_path)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -75,24 +75,50 @@ fn check_command_exists(command_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn find_local_compiler(language: &ExecutionLanguage) -> Option<&'static str> {
-    match language {
-        ExecutionLanguage::C => ["gcc", "clang"]
-            .into_iter()
-            .find(|candidate| check_command_exists(candidate)),
-        ExecutionLanguage::Cpp => ["g++", "clang++"]
-            .into_iter()
-            .find(|candidate| check_command_exists(candidate)),
-        ExecutionLanguage::Rust => ["rustc"]
-            .into_iter()
-            .find(|candidate| check_command_exists(candidate)),
-    }
+pub fn find_local_compiler(language: &ExecutionLanguage) -> Option<String> {
+    let home_dir = std::env::var("HOME").unwrap_or_default();
+    let candidates: Vec<String> = match language {
+        ExecutionLanguage::C => vec![
+            "gcc".to_string(),
+            "clang".to_string(),
+            "/usr/bin/gcc".to_string(),
+            "/opt/homebrew/bin/gcc".to_string(),
+            "/usr/local/bin/gcc".to_string(),
+            "/opt/homebrew/opt/llvm/bin/clang".to_string(),
+            "/usr/bin/clang".to_string(),
+        ],
+        ExecutionLanguage::Cpp => vec![
+            "g++".to_string(),
+            "clang++".to_string(),
+            "/usr/bin/g++".to_string(),
+            "/opt/homebrew/bin/g++".to_string(),
+            "/usr/local/bin/g++".to_string(),
+            "/opt/homebrew/opt/llvm/bin/clang++".to_string(),
+            "/usr/bin/clang++".to_string(),
+        ],
+        ExecutionLanguage::Rust => {
+            let mut rust_paths = vec![
+                "rustc".to_string(),
+                "/opt/homebrew/bin/rustc".to_string(),
+                "/usr/local/bin/rustc".to_string(),
+                "/usr/bin/rustc".to_string(),
+            ];
+            if !home_dir.is_empty() {
+                rust_paths.push(format!("{}/.cargo/bin/rustc", home_dir));
+            }
+            rust_paths
+        }
+    };
+
+    candidates
+        .into_iter()
+        .find(|candidate| check_command_exists(candidate))
 }
 
 pub fn detect_local_compilers() -> CompilerAvailability {
-    let c_compiler = find_local_compiler(&ExecutionLanguage::C).map(|name| name.to_string());
-    let cpp_compiler = find_local_compiler(&ExecutionLanguage::Cpp).map(|name| name.to_string());
-    let rust_compiler = find_local_compiler(&ExecutionLanguage::Rust).map(|name| name.to_string());
+    let c_compiler = find_local_compiler(&ExecutionLanguage::C);
+    let cpp_compiler = find_local_compiler(&ExecutionLanguage::Cpp);
+    let rust_compiler = find_local_compiler(&ExecutionLanguage::Rust);
 
     CompilerAvailability {
         c_available: c_compiler.is_some(),
@@ -224,7 +250,7 @@ pub async fn execute_program(
         }
         Some(ExecutionProvider::Local) | None => {
             if let Some(compiler_name) = find_local_compiler(&request.language) {
-                execute_locally(configuration, request, compiler_name).await
+                execute_locally(configuration, request, &compiler_name).await
             } else {
                 execute_with_jdoodle(
                     configuration,

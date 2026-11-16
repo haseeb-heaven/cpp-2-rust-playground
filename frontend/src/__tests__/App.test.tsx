@@ -116,4 +116,18 @@ describe("App component", () => {
     fireEvent.change(providerSelect, { target: { value: "online" } });
     expect(providerSelect.value).toBe("online");
   });
+
+  it("allows switching between Live Mode and Manual Mode and clicking Convert", async () => {
+    render(<App />);
+    const modeSelect = screen.getByTestId("conversion-mode-select") as HTMLSelectElement;
+    expect(modeSelect.value).toBe("live");
+    fireEvent.change(modeSelect, { target: { value: "manual" } });
+    expect(modeSelect.value).toBe("manual");
+
+    const convertButton = screen.getByTestId("convert-now-button");
+    fireEvent.click(convertButton);
+    await waitFor(() => {
+      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("println!(\"ok\")");
+    });
+  });
 });

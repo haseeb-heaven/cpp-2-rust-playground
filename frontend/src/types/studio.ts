@@ -2,6 +2,7 @@ export type SourceLanguage = "c" | "cpp";
 export type ExecutionLanguage = "c" | "cpp" | "rust";
 export type ExecutionMode = "compile" | "run";
 export type ExecutionProvider = "local" | "online";
+export type ConversionMode = "live" | "manual";
 export type EditorTheme = "dark" | "light" | "midnight";
 export type DiagnosticSeverity = "error" | "warning" | "info";
 export type ErrorCategory =
@@ -64,6 +65,7 @@ export interface CodeExample {
   identifier: string;
   title: string;
   category: string;
+  difficulty: string;
   sourceLanguage: SourceLanguage;
   description: string;
   sourceCode: string;

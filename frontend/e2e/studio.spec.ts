@@ -112,4 +112,24 @@ int main() {
     });
     await expect(page.getByTestId("used-provider-pill")).toContainText("online");
   });
+
+  test("supports Manual Mode with Convert button and Very Complex BFS Graph example", async ({
+    page
+  }) => {
+    await page.goto("/");
+
+    await page.getByTestId("conversion-mode-select").selectOption("manual");
+    await page.getByTestId("examples-button").click();
+    await expect(page.getByTestId("examples-modal")).toBeVisible();
+    await page.getByTestId("example-cpp-bfs-queue-graph").click();
+
+    await page.getByTestId("convert-now-button").click();
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("VecDeque<i32>");
+
+    await page.getByTestId("provider-select").selectOption("local");
+    await page.getByTestId("run-rust-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("Visited: 4", {
+      timeout: 15000
+    });
+  });
 });

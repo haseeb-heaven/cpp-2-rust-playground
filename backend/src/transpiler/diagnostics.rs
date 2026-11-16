@@ -17,6 +17,9 @@ static FOR_EACH_TARGET_REGEX: Lazy<Regex> = Lazy::new(|| {
 static FOR_LOOP_VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^for\s*\(\s*(?:int|size_t|long|auto)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap()
 });
+static FUNCTION_PARAMS_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^[A-Za-z_][A-Za-z0-9_:<>,\s*&]*?\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)\s*(?:const\s*)?\{\s*$").unwrap()
+});
 
 const VALID_PREPROCESSOR_DIRECTIVES: &[&str] = &[
     "include", "define", "undef", "if", "ifdef", "ifndef", "else", "elif", "endif", "pragma",
@@ -109,7 +112,18 @@ pub fn analyze_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagno
             }
         }
 
-        if let Some(captures) = FOR_LOOP_VAR_REGEX.captures(trimmed) {
+        if let Some(captures) = FUNCTION_PARAMS_REGEX.captures(trimmed) {
+            if let Some(params_match) = captures.get(1) {
+                for param_chunk in params_match.as_str().split(',') {
+                    if let Some(param_name) = param_chunk.split_whitespace().last() {
+                        let cleaned_name = param_name.trim_start_matches('&').trim_start_matches('*');
+                        if !cleaned_name.is_empty() {
+                            declared_identifiers.insert(cleaned_name.to_string());
+                        }
+                    }
+                }
+            }
+        } else if let Some(captures) = FOR_LOOP_VAR_REGEX.captures(trimmed) {
             if let Some(loop_var) = captures.get(1) {
                 declared_identifiers.insert(loop_var.as_str().to_string());
             }
