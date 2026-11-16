@@ -2,9 +2,9 @@ name: RustC-Playground CI/CD
 
 on:
   push:
-    branches: [main, master]
+    branches: [master, develop, feature]
   pull_request:
-    branches: [main, master]
+    branches: [master, develop, feature]
 
 permissions:
   contents: read
