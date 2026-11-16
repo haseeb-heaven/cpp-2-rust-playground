@@ -94,15 +94,15 @@ export const App: React.FC = () => {
   const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnostic[]>([]);
   const [transpilerEngine, setTranspilerEngine] = useState<string>(
     sourceLanguage === "c"
-      ? "c2rust (immunant/c2rust C99/C11)"
-      : "cpp2rust (Cpp2Rust/cpp2rust Safe C++)"
+      ? "c2rust (immunant/c2rust C99/C11 engine)"
+      : "cpp2rust (Cpp2Rust/cpp2rust Safe C++ engine)"
   );
 
   useEffect(() => {
     setTranspilerEngine(
       sourceLanguage === "c"
-        ? "c2rust (immunant/c2rust C99/C11)"
-        : "cpp2rust (Cpp2Rust/cpp2rust Safe C++)"
+        ? "c2rust (immunant/c2rust C99/C11 engine)"
+        : "cpp2rust (Cpp2Rust/cpp2rust Safe C++ engine)"
     );
   }, [sourceLanguage]);
   const [highlightedSourceLines, setHighlightedSourceLines] = useState<number[]>([]);

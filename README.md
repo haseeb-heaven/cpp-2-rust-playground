@@ -1,42 +1,58 @@
-# RustC-Playground
+# cpp-2-rust-playground (`RustC-Playground`)
 
-An online C/C++ to Rust line-by-line transpiler and code-execution platform built with **Rust (Axum)** and **React + TypeScript + Vite**.
+Repository: https://github.com/haseeb-heaven/cpp-2-rust-playground
+
+An interactive web IDE and compiler wrapper built with **Rust (Axum)** and **React + TypeScript + Vite** for translating **C** and **C++** code to Rust, inspecting diagnostics and line mappings, and compiling/running both source and generated Rust locally or online.
+
+## Backbone Transpiler Engines
+
+`cpp-2-rust-playground` acts as a web wrapper around two language-specific backbone transpilers:
+
+| Source Language | Backbone Engine | CLI Dispatch | Fallback Engine |
+|---|---|---|---|
+| **C (C99 / C11)** | [`immunant/c2rust`](https://github.com/immunant/c2rust) | Invokes `c2rust transpile compile_commands.json --output-dir <tmp>` when `C2RUST_BIN` or `c2rust` is installed | Built-in C2Rust-aligned C99/C11 -> Safe Rust transpiler |
+| **C++ (C++17 / STL)** | [`Cpp2Rust/cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) | Invokes `cpp2rust --file=<input.cpp> -o=<output.rs>` when `CPP2RUST_BIN` or `cpp2rust` is installed | Built-in Cpp2Rust-aligned C++ -> Safe Rust transpiler |
+
+### Installing External Backbone CLIs (Optional)
+
+By default, the backend works out-of-the-box with zero external transpiler setup via the built-in safe transpiler engines. To also wire up the external `c2rust` and `cpp2rust` CLI binaries:
+
+```bash
+./scripts/setup-engines.sh
+# Or point explicitly to built binaries:
+export C2RUST_BIN="/path/to/c2rust"
+export CPP2RUST_BIN="/path/to/cpp2rust"
+```
 
 ## Features
 
-- **Real-time Debounced Line-by-Line Transpilation**: Translates C/C++ to idiomatic Rust (`Vec`, `HashMap`, `HashSet`, `Option`, `Box`, `println!`, `struct`/`impl`, generics) while preserving manual Rust edits via incremental merging.
-- **Separate Compile & Run**: Compile and Run C, C++, and Rust via the JDoodle Live API with `stdin` support, exit codes, memory, CPU time, and timeout handling.
-- **Interactive Split-Screen UI**: Resizable and swappable panels, syntax highlighting (CodeMirror 6), line-to-line mapping highlights, Diff View, Rust code formatter, pre-made examples, local storage persistence, `.c`/`.cpp`/`.rs` import/export, themes (`Dark`, `Midnight`, `Light`), and keyboard shortcuts.
+- **Dual Conversion Modes**: **Live Mode** (debounced line-by-line transpilation skipping incomplete cursor lines) and **Manual Mode** (on-demand via **Convert**), preserving manual Rust edits via incremental merging.
+- **Dual Execution Providers**: **Local** (`gcc`/`clang`, `g++`/`clang++`, `rustc`) and **Online** (JDoodle Live API via `.env`), with separate **Compile** and **Run** buttons for C, C++, and Rust, plus `stdin` support, exit codes, memory, CPU time, and diagnostics.
+- **Pre-Made Examples**: 31 executable examples spanning C/C++ basics, STL (`Vec`, `HashMap`, `HashSet`, `VecDeque`, `Option`, generics), C structs/unions/linked lists, game-engine snippets (Quake III, Wolfenstein 3D, DOOM, Quake, SM64), `<float.h>` limits, and pure ISO C99/C11 constructs (`_Generic`, flexible array members, VLAs, compound literals, `restrict`/`[static N]`).
+- **Interactive UI**: Resizable/swappable CodeMirror 6 split-screen panels, Diff View, Rust formatter, `.c`/`.cpp`/`.rs` import/export, local storage workspace persistence, themes (`Dark`, `Midnight`, `Light`), and keyboard shortcuts.
 
-## Setup
+## Setup & Run
 
-1. Copy `.env.example` to `.env` and set your JDoodle credentials:
+1. Copy `.env.example` to `.env` and configure JDoodle credentials (optional if using Local mode):
    ```bash
    cp .env.example .env
    ```
-2. Start the Rust backend:
+2. Start backend (`http://127.0.0.1:8080`) and frontend (`http://localhost:5173`):
    ```bash
-   cd backend
-   cargo run
-   ```
-3. Start the React frontend:
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
+   ./start.sh
    ```
 
-## Testing
+## Testing & CI/CD
 
-- **Backend unit & integration tests**:
+- **Backend unit, integration, and 31-example equivalence tests**:
   ```bash
   cd backend && cargo test
   ```
-- **Frontend unit & component tests**:
+- **Frontend unit/component tests & build**:
   ```bash
-  cd frontend && npm test
+  cd frontend && npm test && npm run build
   ```
-- **End-to-End tests (Playwright)** (with backend and frontend running):
+- **Playwright End-to-End tests** (with `./start.sh` running):
   ```bash
   cd frontend && npm run test:e2e
   ```

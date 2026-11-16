@@ -60,6 +60,10 @@ export interface CompilerAvailability {
   cppCompiler: string | null;
   rustAvailable: boolean;
   rustCompiler: string | null;
+  c2rustAvailable?: boolean;
+  c2rustBinary?: string | null;
+  cpp2rustAvailable?: boolean;
+  cpp2rustBinary?: string | null;
 }
 
 export interface CodeExample {

@@ -119,6 +119,11 @@ pub fn detect_local_compilers() -> CompilerAvailability {
     let c_compiler = find_local_compiler(&ExecutionLanguage::C);
     let cpp_compiler = find_local_compiler(&ExecutionLanguage::Cpp);
     let rust_compiler = find_local_compiler(&ExecutionLanguage::Rust);
+    let c2rust_binary =
+        crate::transpiler::detect_external_transpiler_binary(&crate::models::SourceLanguage::C);
+    let cpp2rust_binary = crate::transpiler::detect_external_transpiler_binary(
+        &crate::models::SourceLanguage::Cpp,
+    );
 
     CompilerAvailability {
         c_available: c_compiler.is_some(),
@@ -127,6 +132,10 @@ pub fn detect_local_compilers() -> CompilerAvailability {
         cpp_compiler,
         rust_available: rust_compiler.is_some(),
         rust_compiler,
+        c2rust_available: c2rust_binary.is_some(),
+        c2rust_binary,
+        cpp2rust_available: cpp2rust_binary.is_some(),
+        cpp2rust_binary,
     }
 }
 

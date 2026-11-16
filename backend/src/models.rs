@@ -123,6 +123,10 @@ pub struct CompilerAvailability {
     pub cpp_compiler: Option<String>,
     pub rust_available: bool,
     pub rust_compiler: Option<String>,
+    pub c2rust_available: bool,
+    pub c2rust_binary: Option<String>,
+    pub cpp2rust_available: bool,
+    pub cpp2rust_binary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
