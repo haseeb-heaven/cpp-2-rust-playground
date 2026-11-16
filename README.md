@@ -1,5 +1,11 @@
 # cpp-2-rust-playground (`RustC-Playground`)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![CI/CD](https://github.com/haseeb-heaven/cpp-2-rust-playground/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/haseeb-heaven/cpp-2-rust-playground/actions/workflows/ci.yml)
+[![C Engine: c2rust](https://img.shields.io/badge/C%20Engine-immunant%2Fc2rust-orange.svg)](https://github.com/immunant/c2rust)
+[![C++ Engine: cpp2rust](https://img.shields.io/badge/C%2B%2B%20Engine-Cpp2Rust%2Fcpp2rust-purple.svg)](https://github.com/Cpp2Rust/cpp2rust)
+[![Built with Gemini Argon & Carbon](https://img.shields.io/badge/Built%20With-Gemini%20Argon%20%26%20Carbon-4285F4.svg)](#credits--acknowledgments)
+
 Repository: https://github.com/haseeb-heaven/cpp-2-rust-playground
 
 An interactive web IDE and compiler wrapper built with **Rust (Axum)** and **React + TypeScript + Vite** for translating **C** and **C++** code to Rust, inspecting diagnostics and line mappings, and compiling/running both source and generated Rust locally or online.
@@ -31,6 +37,12 @@ export CPP2RUST_BIN="/path/to/cpp2rust"
 - **Pre-Made Examples**: 31 executable examples spanning C/C++ basics, STL (`Vec`, `HashMap`, `HashSet`, `VecDeque`, `Option`, generics), C structs/unions/linked lists, game-engine snippets (Quake III, Wolfenstein 3D, DOOM, Quake, SM64), `<float.h>` limits, and pure ISO C99/C11 constructs (`_Generic`, flexible array members, VLAs, compound literals, `restrict`/`[static N]`).
 - **Interactive UI**: Resizable/swappable CodeMirror 6 split-screen panels, Diff View, Rust formatter, `.c`/`.cpp`/`.rs` import/export, local storage workspace persistence, themes (`Dark`, `Midnight`, `Light`), and keyboard shortcuts.
 
+## Branching Model
+
+- **`master`**: Stable release branch — updated only when new versions are released.
+- **`develop`**: Default active development and integration branch.
+- **`feature`**: Active feature branch for staging incremental work before merging into `develop`.
+
 ## Setup & Run
 
 1. Copy `.env.example` to `.env` and configure JDoodle credentials (optional if using Local mode):
@@ -56,3 +68,15 @@ export CPP2RUST_BIN="/path/to/cpp2rust"
   ```bash
   cd frontend && npm run test:e2e
   ```
+
+## Credits & Acknowledgments
+
+- **Creator & Lead Developer**: [Haseeb Mir (`@haseeb-heaven`)](https://github.com/haseeb-heaven)
+- **C → Rust Backbone Transpiler**: [`immunant/c2rust`](https://github.com/immunant/c2rust) — C99-compliant C-to-Rust transpiler architecture
+- **C++ → Rust Backbone Transpiler**: [`Cpp2Rust/cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) — AST-driven C++ to Safe Rust translator and rule system
+- **Testing & Review Tooling**: [`openqodex/openqodex`](https://github.com/openqodex/openqodex) and [Playwright](https://playwright.dev/)
+- **AI Co-Contributors**: **Antigravity** (Google DeepMind) powered by **Gemini Argon** (Planning & Architecture) and **Gemini Carbon** (Execution & Verification)
+
+## License
+
+This project is licensed under the **MIT License** — see the [LICENSE](./LICENSE) file for details and third-party notices for upstream backbone transpilers.
