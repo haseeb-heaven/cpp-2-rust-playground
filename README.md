@@ -71,11 +71,13 @@ export CPP2RUST_BIN="/path/to/cpp2rust"
 
 ## Credits & Acknowledgments
 
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full contributor list.
+
 - **Creator & Lead Developer**: [Haseeb Mir (`@haseeb-heaven`)](https://github.com/haseeb-heaven)
 - **C → Rust Backbone Transpiler**: [`immunant/c2rust`](https://github.com/immunant/c2rust) — C99-compliant C-to-Rust transpiler architecture
 - **C++ → Rust Backbone Transpiler**: [`Cpp2Rust/cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) — AST-driven C++ to Safe Rust translator and rule system
 - **Testing & Review Tooling**: [`openqodex/openqodex`](https://github.com/openqodex/openqodex) and [Playwright](https://playwright.dev/)
-- **AI Co-Contributors**: **Antigravity** (Google DeepMind) powered by **Gemini Argon** (Planning & Architecture) and **Gemini Carbon** (Execution & Verification)
+- **AI Co-Contributors**: **Antigravity** (Google DeepMind) powered by [**Gemini Argon (`@Gemini-Argon`)**](https://github.com/Gemini-Argon) (Planning & Architecture) and [**Gemini Carbon (`gemini-code-assist[bot]`)**](https://github.com/apps/gemini-code-assist) (Execution & Verification)
 
 ## License
 
