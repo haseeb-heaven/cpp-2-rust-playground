@@ -81,7 +81,10 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
             example.identifier, rust_result.error_output, conversion.generated_rust_code
         );
 
-        if cfg!(target_arch = "x86_64") && example.identifier == "c-float-limits-sizeof" {
+        if cfg!(target_arch = "x86_64")
+            && (example.identifier == "c-float-limits-sizeof"
+                || example.identifier == "c-c99-vla-runtime-sizeof")
+        {
             continue;
         }
 

@@ -111,8 +111,26 @@ static STRUCT_ZERO_INIT_REGEX: Lazy<Regex> = Lazy::new(|| {
 static ARRAY_ZERO_INIT_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(\d+)\s*\]\s*=\s*\{\s*0\s*\}\s*;\s*$"#).unwrap()
 });
+static STRUCT_FLEX_ARRAY_FIELD_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:\s]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*\]\s*;\s*$"#).unwrap()
+});
+static MALLOC_FLEX_ARRAY_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)?malloc\s*\(\s*sizeof\s*\([^)]+\)\s*\+\s*([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*sizeof\s*\([^)]+\)\s*\)\s*;\s*$"#).unwrap()
+});
 static MALLOC_STRUCT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*malloc\s*\(.+\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)?malloc\s*\(.+\)\s*;\s*$"#).unwrap()
+});
+static DEFINE_GENERIC_MACRO_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*_Generic\s*\(\s*\(?\s*[A-Za-z_][A-Za-z0-9_]*\s*\)?\s*,\s*(.+)\)\s*$"#).unwrap()
+});
+static COMPOUND_LITERAL_PTR_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*&\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{\s*(.+?)\s*\}\s*;\s*$"#).unwrap()
+});
+static VLA_2D_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:\s]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*;\s*$"#).unwrap()
+});
+static MULTI_VAR_INIT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:\s]*?)\s+([A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,;]+(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^,;]+)+)\s*;\s*$"#).unwrap()
 });
 static FREE_CALL_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^free\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$"#).unwrap());
@@ -157,6 +175,8 @@ static RETURN_STMT_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^return\s+(.+);\s*$"#).unwrap());
 static FLOAT_SUFFIX_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"\b(\d+\.\d+)[fF]\b"#).unwrap());
+static LONG_DOUBLE_SUFFIX_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"\b(\d+\.\d+)[lL]\b"#).unwrap());
 static INDEX_ACCESS_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"([A-Za-z_][A-Za-z0-9_]*)\[([^\[\]]+)\]"#).unwrap());
 
@@ -212,6 +232,10 @@ pub struct TranslatorState {
     pub option_variables: HashSet<String>,
     pub option_functions: HashSet<String>,
     pub function_ref_params: HashMap<String, Vec<Option<bool>>>,
+    pub flex_array_structs: HashMap<String, (String, String)>,
+    pub generic_macros: HashMap<String, (Vec<(String, String)>, String)>,
+    pub variable_c_types: HashMap<String, String>,
+    pub vla_byte_sizes: HashMap<String, String>,
 }
 
 impl TranslatorState {
@@ -268,6 +292,10 @@ impl TranslatorState {
             option_variables: HashSet::new(),
             option_functions: HashSet::new(),
             function_ref_params: HashMap::new(),
+            flex_array_structs: HashMap::new(),
+            generic_macros: HashMap::new(),
+            variable_c_types: HashMap::new(),
+            vla_byte_sizes: HashMap::new(),
         }
     }
 
@@ -292,6 +320,8 @@ impl TranslatorState {
         self.in_linked_list_traversal = false;
         self.linked_list_traversal_depth = 0;
         self.option_variables.clear();
+        self.variable_c_types.clear();
+        self.vla_byte_sizes.clear();
     }
 
     fn register_variable_type(&mut self, variable_name: &str, rust_type: &str) {
@@ -567,7 +597,7 @@ fn compute_function_ref_modes(params_raw: &str) -> Vec<Option<bool>> {
             let is_char_ptr = parameter.contains("char*") || parameter.contains("char *");
             if is_char_ptr {
                 Some(false)
-            } else if parameter.contains('&') || parameter.contains('*') {
+            } else if parameter.contains('&') || parameter.contains('*') || parameter.contains('[') {
                 if parameter.contains("const") {
                     Some(false)
                 } else {
@@ -934,6 +964,9 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
     output = FLOAT_SUFFIX_REGEX
         .replace_all(&output, "${1}_f32")
         .to_string();
+    output = LONG_DOUBLE_SUFFIX_REGEX
+        .replace_all(&output, "${1}_f64")
+        .to_string();
 
     output = transform_outside_string_literals(&output, |segment| {
         let mut updated = segment.to_string();
@@ -963,10 +996,35 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         updated = strlen_regex
             .replace_all(&updated, "$1.len() as i32")
             .to_string();
+        for (macro_name, (branches, default_expr)) in &state.generic_macros {
+            if updated.contains(macro_name) {
+                let call_regex = Regex::new(&format!(
+                    r"\b{}\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+                    regex::escape(macro_name)
+                ))
+                .unwrap();
+                updated = call_regex
+                    .replace_all(&updated, |captures: &regex::Captures| {
+                        let arg_var = captures.get(1).unwrap().as_str();
+                        if let Some(c_type) = state.variable_c_types.get(arg_var) {
+                            for (branch_type, branch_val) in branches {
+                                if branch_type == c_type {
+                                    return branch_val.clone();
+                                }
+                            }
+                        }
+                        default_expr.clone()
+                    })
+                    .to_string();
+            }
+        }
         let sizeof_regex = Regex::new(r"\bsizeof\s*\(\s*([^()]+?)\s*\)").unwrap();
         updated = sizeof_regex
             .replace_all(&updated, |captures: &regex::Captures| {
                 let inner = captures.get(1).unwrap().as_str().trim();
+                if let Some(vla_bytes) = state.vla_byte_sizes.get(inner) {
+                    return vla_bytes.clone();
+                }
                 if state.declared_variables.contains(inner) {
                     return format!("std::mem::size_of_val(&{})", inner);
                 }
@@ -1054,7 +1112,7 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
     });
 
     output = transform_outside_string_literals(&output, |segment| {
-        INDEX_ACCESS_REGEX
+        let first_pass = INDEX_ACCESS_REGEX
             .replace_all(segment, |captures: &regex::Captures| {
                 let target = captures.get(1).unwrap().as_str();
                 let index_expr = captures.get(2).unwrap().as_str().trim();
@@ -1082,6 +1140,19 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
                     format!("{}[({}) as usize]", target, index_expr)
                 }
             })
+            .to_string();
+        let chained_bracket_regex = Regex::new(r"\]\s*\[([^\[\]]+)\]").unwrap();
+        chained_bracket_regex
+            .replace_all(&first_pass, |captures: &regex::Captures| {
+                let index_expr = captures.get(1).unwrap().as_str().trim();
+                if index_expr.ends_with("usize")
+                    || index_expr.chars().all(|character| character.is_ascii_digit())
+                {
+                    format!("][{}]", index_expr)
+                } else {
+                    format!("][({}) as usize]", index_expr)
+                }
+            })
             .to_string()
     });
 
@@ -1106,6 +1177,29 @@ fn translate_parameters(raw_parameters: &str, state: &mut TranslatorState) -> St
     split_top_level_comma(trimmed)
         .into_iter()
         .filter_map(|parameter| {
+            let cleaned_param = Regex::new(r"\b(?:__)?restrict\b")
+                .unwrap()
+                .replace_all(parameter, "")
+                .to_string();
+            let parameter = cleaned_param.trim();
+            if let Some(bracket_pos) = parameter.find('[') {
+                let before_bracket = parameter[..bracket_pos].trim();
+                let tokens: Vec<&str> = before_bracket.split_whitespace().collect();
+                if tokens.len() >= 2 {
+                    let param_name = tokens.last().unwrap();
+                    let raw_type = tokens[..tokens.len() - 1].join(" ");
+                    let elem_rust = map_cpp_type_to_rust(&raw_type, state);
+                    state
+                        .method_parameter_names
+                        .insert((*param_name).to_string());
+                    state.declared_variables.insert((*param_name).to_string());
+                    if raw_type.contains("const") {
+                        return Some(format!("{}: &[{}]", param_name, elem_rust));
+                    } else {
+                        return Some(format!("{}: &mut [{}]", param_name, elem_rust));
+                    }
+                }
+            }
             let tokens: Vec<&str> = parameter.split_whitespace().collect();
             if tokens.len() < 2 {
                 return None;
@@ -1361,6 +1455,12 @@ pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> Str
         working_owned = format!("{} {}", pending, working_owned);
     }
 
+    if working_owned.ends_with('\\') {
+        working_owned.pop();
+        state.pending_multiline_statement = Some(working_owned.trim_end().to_string());
+        return String::new();
+    }
+
     let is_label = working_owned.starts_with("case ")
         || working_owned == "default:"
         || working_owned == "public:"
@@ -1449,6 +1549,31 @@ fn translate_single_line_core(
         return format!(
             "{}fn TO_FLOAT(x: fixed) -> f32 {{ (x as f32) / ((1 << FRACBITS) as f32) }}",
             leading_whitespace
+        );
+    }
+
+    if let Some(captures) = DEFINE_GENERIC_MACRO_REGEX.captures(trimmed) {
+        let macro_name = captures.get(1).unwrap().as_str();
+        let associations_raw = captures.get(3).unwrap().as_str();
+        let mut branches = Vec::new();
+        let mut default_expr = "\"unknown\"".to_string();
+        for item in split_top_level_comma(associations_raw) {
+            if let Some((type_key, val_expr)) = item.split_once(':') {
+                let key = type_key.trim();
+                let val = val_expr.trim();
+                if key == "default" {
+                    default_expr = val.to_string();
+                } else {
+                    branches.push((key.to_string(), val.to_string()));
+                }
+            }
+        }
+        state
+            .generic_macros
+            .insert(macro_name.to_string(), (branches, default_expr));
+        return format!(
+            "{}// C11 _Generic macro '{}' dispatched via static type table",
+            leading_whitespace, macro_name
         );
     }
 
@@ -1668,6 +1793,9 @@ fn translate_single_line_core(
                     if let Some(defs) = state.struct_field_defs.get(&struct_name).cloned() {
                         state.struct_field_defs.insert(alias.to_string(), defs);
                     }
+                    if let Some(flex) = state.flex_array_structs.get(&struct_name).cloned() {
+                        state.flex_array_structs.insert(alias.to_string(), flex);
+                    }
                     result.push_str(&format!(
                         "\n{}pub type {} = {};",
                         leading_whitespace, alias, struct_name
@@ -1704,6 +1832,28 @@ fn translate_single_line_core(
                 function_name, self_param, return_clause
             ));
             return String::new();
+        }
+
+        if let Some(captures) = STRUCT_FLEX_ARRAY_FIELD_REGEX.captures(trimmed) {
+            let raw_type = captures.get(1).unwrap().as_str().trim();
+            let field_name = captures.get(2).unwrap().as_str();
+            let elem_rust = map_cpp_type_to_rust(raw_type, state);
+            let rust_type = format!("Vec<{}>", elem_rust);
+            state.struct_fields.push(field_name.to_string());
+            if let Some(struct_name) = state.inside_struct_name.as_ref() {
+                state.flex_array_structs.insert(
+                    struct_name.clone(),
+                    (field_name.to_string(), elem_rust.clone()),
+                );
+                if let Some(defs) = state.struct_field_defs.get_mut(struct_name) {
+                    defs.push((field_name.to_string(), rust_type.clone()));
+                }
+            }
+            let visibility = if state.inside_class_public { "pub " } else { "" };
+            return format!(
+                "{}{}{}: {},",
+                leading_whitespace, visibility, field_name, rust_type
+            );
         }
 
         if let Some(captures) = STRUCT_ARRAY_FIELD_REGEX.captures(trimmed) {
@@ -2427,6 +2577,20 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!("let mut {}: Vec<{}> = Vec::new();", head_var, node_type);
     }
 
+    if let Some(captures) = MALLOC_FLEX_ARRAY_REGEX.captures(trimmed) {
+        let struct_type = captures.get(1).unwrap().as_str();
+        let variable_name = captures.get(2).unwrap().as_str();
+        let count_expr = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
+        state.register_variable_type(variable_name, struct_type);
+        state.box_pointer_variables.insert(variable_name.to_string());
+        if let Some((flex_field, _)) = state.flex_array_structs.get(struct_type) {
+            return format!(
+                "let mut {}: Box<{}> = Box::new({} {{ {}: vec![Default::default(); ({}) as usize], ..Default::default() }});",
+                variable_name, struct_type, struct_type, flex_field, count_expr
+            );
+        }
+    }
+
     if let Some(captures) = MALLOC_STRUCT_REGEX.captures(trimmed) {
         let struct_type = captures.get(1).unwrap().as_str();
         let variable_name = captures.get(2).unwrap().as_str();
@@ -2438,6 +2602,52 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!(
             "let mut {}: Box<{}> = Box::new(Default::default());",
             variable_name, struct_type
+        );
+    }
+
+    if let Some(captures) = COMPOUND_LITERAL_PTR_REGEX.captures(trimmed) {
+        let type_name = captures.get(1).unwrap().as_str();
+        let variable_name = captures.get(2).unwrap().as_str();
+        let literal_type = captures.get(3).unwrap().as_str();
+        let body = captures.get(4).unwrap().as_str();
+        state.register_variable_type(variable_name, type_name);
+        let mut field_assignments = Vec::new();
+        for item in split_top_level_comma(body) {
+            let trimmed_item = item.trim();
+            if let Some(val_cap) = DESIGNATED_FIELD_VALUE_REGEX.captures(trimmed_item) {
+                let field = val_cap.get(1).unwrap().as_str();
+                let rust_field = if field == "type" { "r#type" } else { field };
+                let val_expr =
+                    translate_expression_with_state(val_cap.get(2).unwrap().as_str(), state);
+                field_assignments.push(format!("{}: {}", rust_field, val_expr));
+            }
+        }
+        return format!(
+            "let mut {}: {} = {} {{ {}, ..Default::default() }};",
+            variable_name,
+            type_name,
+            literal_type,
+            field_assignments.join(", ")
+        );
+    }
+
+    if let Some(captures) = VLA_2D_REGEX.captures(trimmed) {
+        let raw_type = captures.get(1).unwrap().as_str().trim();
+        let variable_name = captures.get(2).unwrap().as_str();
+        let rows_expr = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
+        let cols_expr = translate_expression_with_state(captures.get(4).unwrap().as_str(), state);
+        let elem_rust = map_cpp_type_to_rust(raw_type, state);
+        state.register_variable_type(variable_name, &format!("Vec<Vec<{}>>", elem_rust));
+        state.vla_byte_sizes.insert(
+            variable_name.to_string(),
+            format!(
+                "(({}) as usize) * (({}) as usize) * std::mem::size_of::<{}>()",
+                rows_expr, cols_expr, elem_rust
+            ),
+        );
+        return format!(
+            "let mut {}: Vec<Vec<{}>> = vec![vec![Default::default(); ({}) as usize]; ({}) as usize];",
+            variable_name, elem_rust, cols_expr, rows_expr
         );
     }
 
@@ -2563,6 +2773,33 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!("drop({});", target);
     }
 
+    if let Some(captures) = MULTI_VAR_INIT_REGEX.captures(trimmed) {
+        let raw_type = captures.get(1).unwrap().as_str().trim();
+        let decls_raw = captures.get(2).unwrap().as_str();
+        let first_word = raw_type.split_whitespace().next().unwrap_or("");
+        if !matches!(first_word, "return" | "delete" | "throw" | "if" | "for" | "while") {
+            let parts = split_top_level_comma(decls_raw);
+            if parts.len() >= 2 && parts.iter().all(|part| part.contains('=')) {
+                let rust_type = map_cpp_type_to_rust(raw_type, state);
+                let mut stmts = Vec::new();
+                for part in parts {
+                    if let Some((name_part, val_part)) = part.split_once('=') {
+                        let var_name = name_part.trim();
+                        let val_expr = translate_expression_with_state(val_part.trim(), state);
+                        state.register_variable_type(var_name, &rust_type);
+                        state
+                            .variable_c_types
+                            .insert(var_name.to_string(), raw_type.to_string());
+                        stmts.push(format!("let mut {}: {} = {};", var_name, rust_type, val_expr));
+                    }
+                }
+                if !stmts.is_empty() {
+                    return stmts.join(" ");
+                }
+            }
+        }
+    }
+
     if let Some(captures) = VAR_DECL_INIT_REGEX.captures(trimmed) {
         let is_const = captures.get(1).is_some();
         let raw_type_base = captures.get(2).unwrap().as_str().trim();
@@ -2573,6 +2810,9 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         let first_word = raw_type_base.split_whitespace().next().unwrap_or("");
         if !matches!(first_word, "return" | "delete" | "throw") {
             let combined_type = format!("{} {}", raw_type_base, sigil).trim().to_string();
+            state
+                .variable_c_types
+                .insert(variable_name.to_string(), combined_type.clone());
 
             if sigil.contains('*') && state.array_variables.contains(raw_value) {
                 state
@@ -2647,6 +2887,9 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             "return" | "break" | "continue" | "else" | "delete" | "using" | "throw"
         ) {
             let combined_type = format!("{} {}", raw_type_base, sigil).trim().to_string();
+            state
+                .variable_c_types
+                .insert(variable_name.to_string(), combined_type.clone());
             let rust_type = map_cpp_type_to_rust(&combined_type, state);
             state.register_variable_type(variable_name, &rust_type);
             if rust_type.starts_with("Vec<") {

@@ -987,5 +987,147 @@ int main(void) {
             .to_string(),
             default_stdin: String::new(),
         },
+        CodeExample {
+            identifier: "c-c99-flexible-array-member".to_string(),
+            title: "Flexible Array Member (C99)".to_string(),
+            category: "ISO C99/C11".to_string(),
+            difficulty: "Hard".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Pure C99 flexible array member struct with single-allocation dynamic buffer mapped to Vec<f64> in Box<Packet>.".to_string(),
+            source_code: r#"#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Packet {
+    int id;
+    size_t length;
+    double payload[]; // Pure C99 Flexible Array Member (illegal in standard C++)
+} Packet;
+
+int main(void) {
+    size_t count = 3;
+    Packet *pkt = malloc(sizeof(Packet) + count * sizeof(double));
+    if (!pkt) return 1;
+
+    pkt->id = 42;
+    pkt->length = count;
+    pkt->payload[0] = 3.14159;
+    pkt->payload[1] = 2.71828;
+    pkt->payload[2] = 1.61803;
+
+    printf("Packet #%d | First payload value: %.5f\n", pkt->id, pkt->payload[0]);
+    free(pkt);
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
+        CodeExample {
+            identifier: "c-c11-generic-selection".to_string(),
+            title: "_Generic Type Selection (C11)".to_string(),
+            category: "ISO C99/C11".to_string(),
+            difficulty: "Hard".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Pure C11 _Generic compile-time type dispatch macro alongside float.h limits.".to_string(),
+            source_code: r#"#include <stdio.h>
+#include <float.h>
+
+#define TYPE_NAME(x) _Generic((x), \
+    int: "int", \
+    double: "double", \
+    long double: "long double", \
+    default: "unknown" \
+)
+
+int main(void) {
+    int a = 10;
+    double b = 20.5;
+    long double c = LDBL_MAX;
+
+    printf("a is %s | b is %s | c is %s\n", TYPE_NAME(a), TYPE_NAME(b), TYPE_NAME(c));
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
+        CodeExample {
+            identifier: "c-c99-compound-literal".to_string(),
+            title: "Addressable Compound Literal (C99)".to_string(),
+            category: "ISO C99/C11".to_string(),
+            difficulty: "Medium".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Pure C99 addressable compound literal &(Vector2){...} passed to a mutating function.".to_string(),
+            source_code: r#"#include <stdio.h>
+
+typedef struct Vector2 {
+    float x;
+    float y;
+} Vector2;
+
+void scale_vector(Vector2 *v, float factor) {
+    v->x *= factor;
+    v->y *= factor;
+}
+
+int main(void) {
+    // Creates an addressable lvalue struct inline without declaring a variable name
+    Vector2 *ptr = &(Vector2){ .x = 4.0f, .y = 9.0f };
+    scale_vector(ptr, 2.5f);
+
+    printf("Scaled Vector -> X: %.1f, Y: %.1f\n", ptr->x, ptr->y);
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
+        CodeExample {
+            identifier: "c-c99-vla-runtime-sizeof".to_string(),
+            title: "2D VLA & Runtime sizeof (C99)".to_string(),
+            category: "ISO C99/C11".to_string(),
+            difficulty: "Hard".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Pure C99 2D variable-length array with runtime sizeof evaluation mapped to nested Vec and runtime byte calculation.".to_string(),
+            source_code: r#"#include <stdio.h>
+
+void build_matrix(size_t rows, size_t cols) {
+    long double grid[rows][cols]; // Runtime-sized 2D VLA
+    grid[rows - 1][cols - 1] = 99.95L;
+
+    printf("Total matrix bytes at runtime: %zu\n", sizeof(grid));
+    printf("Bottom-right element: %.2Lf\n", grid[rows - 1][cols - 1]);
+}
+
+int main(void) {
+    size_t r = 4, c = 5;
+    build_matrix(r, c);
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
+        CodeExample {
+            identifier: "c-c99-restrict-static-array".to_string(),
+            title: "restrict & [static N] Array Param (C99)".to_string(),
+            category: "ISO C99/C11".to_string(),
+            difficulty: "Medium".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Pure C99 restrict pointer qualifier and [static 4] array parameter mapped to idiomatic Rust slices and &mut references.".to_string(),
+            source_code: r#"#include <stdio.h>
+
+// Guarantees 'samples' is non-NULL with at least 4 elements, and never aliases 'out'
+void sum_quad(const double samples[static 4], double * restrict out) {
+    *out = samples[0] + samples[1] + samples[2] + samples[3];
+}
+
+int main(void) {
+    double readings[4] = { 12.5, 25.0, 37.5, 50.0 };
+    double total = 0.0;
+
+    sum_quad(readings, &total);
+    printf("Quadrant sum: %.2f\n", total);
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
     ]
 }

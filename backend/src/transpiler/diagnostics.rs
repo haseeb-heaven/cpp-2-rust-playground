@@ -262,6 +262,54 @@ pub fn analyze_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagno
                 ),
             });
         }
+
+        if trimmed.ends_with("[];") && !trimmed.contains('=') {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C99 Flexible Array Member ('[]' at end of struct) is exclusive to ISO C (forbidden in C++) and has no fixed-size struct layout in safe Rust; modeled as 'Vec<T>'.".to_string(),
+                suggested_fix: Some(
+                    "Use a 'Vec<T>' field inside the Rust struct instead of manual 'malloc(sizeof(S) + n * sizeof(T))'.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.contains("_Generic(") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C11 '_Generic' compile-time type selection is exclusive to ISO C (not supported in C++); dispatched via static type resolution in Rust.".to_string(),
+                suggested_fix: Some(
+                    "Use Rust traits (e.g., 'trait TypeName { fn type_name() -> &\\'static str; }') for extensible type dispatch.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.contains("&(") && trimmed.contains("){") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C99 addressable compound literal ('&(Type){...}') is exclusive to ISO C (illegal in C++); bound to a mutable stack variable in Rust.".to_string(),
+                suggested_fix: Some(
+                    "Bind a local 'let mut v = Type { ... };' and pass '&mut v' in Rust.".to_string(),
+                ),
+            });
+        }
+
+        if trimmed.contains(" restrict ") || trimmed.contains("[static ") {
+            diagnostics.push(ConversionDiagnostic {
+                line_number,
+                severity: DiagnosticSeverity::Warning,
+                category: ErrorCategory::Conversion,
+                message: "C99 'restrict' pointer qualifier and '[static N]' array parameter are exclusive to ISO C; mapped to Rust '&[T]' and '&mut T' (which enforces non-aliasing by default).".to_string(),
+                suggested_fix: Some(
+                    "In Rust, '&mut T' guarantees exclusive non-aliased mutable access and '&[T]' / '&[T; N]' provides bounds-checked slices.".to_string(),
+                ),
+            });
+        }
     }
 
     for unclosed_line in brace_stack {
