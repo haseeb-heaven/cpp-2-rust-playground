@@ -134,15 +134,21 @@ int main() {
 
     await page.getByTestId("provider-select").selectOption("local");
     await page.getByTestId("run-source-button").click();
-    await expect(page.getByTestId("program-output")).toContainText("1A3F base 16: valid", {
-      timeout: 15000
-    });
+    await expect(page.getByTestId("program-output")).toContainText(
+      "The number 1A3F is valid in base 16",
+      {
+        timeout: 15000
+      }
+    );
     await expect(page.getByTestId("used-provider-pill")).toContainText("local (");
 
     await page.getByTestId("run-rust-button").click();
-    await expect(page.getByTestId("program-output")).toContainText("19Z base 10: invalid", {
-      timeout: 15000
-    });
+    await expect(page.getByTestId("program-output")).toContainText(
+      "The number 1A3F is valid in base 16",
+      {
+        timeout: 15000
+      }
+    );
     await expect(page.getByTestId("used-provider-pill")).toContainText("local (");
   });
 

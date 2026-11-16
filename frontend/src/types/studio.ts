@@ -82,5 +82,6 @@ export interface SavedWorkspaceState {
   theme: EditorTheme;
   isSwappedPanels: boolean;
   splitRatioPercent: number;
+  executionProvider?: ExecutionProvider;
   savedAtTimestamp: string;
 }

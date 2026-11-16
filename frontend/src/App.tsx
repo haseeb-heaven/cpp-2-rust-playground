@@ -98,7 +98,9 @@ export const App: React.FC = () => {
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [conversionMode, setConversionMode] = useState<ConversionMode>("live");
   const [activeSourceLineNumber, setActiveSourceLineNumber] = useState<number>(1);
-  const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("local");
+  const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>(
+    savedWorkspace?.executionProvider ?? "local"
+  );
   const [compilerAvailability, setCompilerAvailability] = useState<CompilerAvailability | null>(
     null
   );
@@ -227,6 +229,7 @@ export const App: React.FC = () => {
       theme,
       isSwappedPanels,
       splitRatioPercent,
+      executionProvider,
       savedAtTimestamp: new Date().toISOString()
     });
     setSaveStatusMessage("Saved!");
@@ -240,7 +243,8 @@ export const App: React.FC = () => {
     stdinInput,
     theme,
     isSwappedPanels,
-    splitRatioPercent
+    splitRatioPercent,
+    executionProvider
   ]);
 
   const handleExecute = useCallback(
@@ -532,6 +536,7 @@ export const App: React.FC = () => {
         <OutputConsole
           stdinInput={stdinInput}
           onStdinChange={setStdinInput}
+          executionProvider={executionProvider}
           executionResult={executionResult}
           lastExecutedLabel={lastExecutedLabel}
           isExecuting={isExecuting}

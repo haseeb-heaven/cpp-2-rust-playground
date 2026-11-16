@@ -1,10 +1,16 @@
 import React, { useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, Cpu, Terminal, XCircle } from "lucide-react";
-import type { ConversionDiagnostic, ExecutionResponse, LineMapping } from "../types/studio";
+import type {
+  ConversionDiagnostic,
+  ExecutionProvider,
+  ExecutionResponse,
+  LineMapping
+} from "../types/studio";
 
 interface OutputConsoleProps {
   stdinInput: string;
   onStdinChange: (value: string) => void;
+  executionProvider: ExecutionProvider;
   executionResult: ExecutionResponse | null;
   lastExecutedLabel: string | null;
   isExecuting: boolean;
@@ -18,6 +24,7 @@ type ConsoleTab = "output" | "diagnostics" | "mappings";
 export const OutputConsole: React.FC<OutputConsoleProps> = ({
   stdinInput,
   onStdinChange,
+  executionProvider,
   executionResult,
   lastExecutedLabel,
   isExecuting,
@@ -63,37 +70,40 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
           <span>Line Mapping ({lineMappings.length})</span>
         </button>
 
-        {executionResult && (
-          <div className="execution-metrics">
-            <span className="provider-pill" data-testid="used-provider-pill">
-              {executionResult.usedProvider}
-            </span>
-            <span className={`status-pill ${executionResult.success ? "success" : "failure"}`}>
-              {executionResult.success ? (
-                <CheckCircle2 size={13} />
-              ) : (
-                <XCircle size={13} />
-              )}
-              <span>
-                {lastExecutedLabel} · Exit {executionResult.statusCode}
-                {executionResult.timedOut ? " (Timed Out)" : ""}
+        <div className="execution-metrics">
+          <span className="provider-pill" data-testid="used-provider-pill">
+            {executionResult?.usedProvider ??
+              (executionProvider === "local" ? "local (ready)" : "online (JDoodle)")}
+          </span>
+          {executionResult && (
+            <>
+              <span className={`status-pill ${executionResult.success ? "success" : "failure"}`}>
+                {executionResult.success ? (
+                  <CheckCircle2 size={13} />
+                ) : (
+                  <XCircle size={13} />
+                )}
+                <span>
+                  {lastExecutedLabel} · Exit {executionResult.statusCode}
+                  {executionResult.timedOut ? " (Timed Out)" : ""}
+                </span>
               </span>
-            </span>
-            <span className="metric-item">
-              <Clock size={13} />
-              {executionResult.executionTimeMilliseconds} ms
-            </span>
-            {executionResult.cpuTimeSeconds && (
               <span className="metric-item">
-                <Cpu size={13} />
-                CPU {executionResult.cpuTimeSeconds}s
+                <Clock size={13} />
+                {executionResult.executionTimeMilliseconds} ms
               </span>
-            )}
-            {executionResult.memoryUsed && (
-              <span className="metric-item">Mem {executionResult.memoryUsed} KB</span>
-            )}
-          </div>
-        )}
+              {executionResult.cpuTimeSeconds && (
+                <span className="metric-item">
+                  <Cpu size={13} />
+                  CPU {executionResult.cpuTimeSeconds}s
+                </span>
+              )}
+              {executionResult.memoryUsed && (
+                <span className="metric-item">Mem {executionResult.memoryUsed} KB</span>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       <div className="console-body">
@@ -119,7 +129,9 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
               </div>
               <pre className="output-pre" data-testid="program-output">
                 {isExecuting
-                  ? "Compiling and executing via JDoodle Live API..."
+                  ? executionProvider === "local"
+                    ? "Compiling and executing locally (gcc / g++ / rustc)..."
+                    : "Compiling and executing via JDoodle Online API..."
                   : executionResult
                     ? executionResult.errorOutput
                       ? executionResult.errorOutput
