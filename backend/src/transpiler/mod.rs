@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod explanations;
 pub mod line_translator;
 pub mod postprocessor;
 
@@ -6,6 +7,7 @@ use crate::models::{
     ConversionResponse, LineMapping, RustOutputStyle, SourceLanguage,
 };
 use diagnostics::analyze_source_diagnostics;
+pub use explanations::generate_conversion_explanations;
 use line_translator::{translate_single_line, TranslatorState};
 use postprocessor::postprocess_rust_code;
 use std::fs;
@@ -209,6 +211,14 @@ pub fn convert_source_to_rust_with_style(
             };
             let (idiomatic_rust_code, post_processing) =
                 postprocess_rust_code(&faithful_rust_code);
+            let explanations = generate_conversion_explanations(
+                source_code,
+                source_language,
+                &faithful_rust_code,
+                &idiomatic_rust_code,
+                &output_style,
+                &post_processing,
+            );
             let generated_rust_code = match output_style {
                 RustOutputStyle::Faithful => faithful_rust_code.clone(),
                 RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
@@ -237,6 +247,7 @@ pub fn convert_source_to_rust_with_style(
                 conversion_time_milliseconds: start_instant.elapsed().as_millis(),
                 transpiler_engine: engine_label,
                 post_processing,
+                explanations,
             };
         }
     }
@@ -303,6 +314,14 @@ pub fn convert_source_to_rust_with_style(
 
     let faithful_rust_code = final_rust_lines.join("\n");
     let (idiomatic_rust_code, post_processing) = postprocess_rust_code(&faithful_rust_code);
+    let explanations = generate_conversion_explanations(
+        source_code,
+        source_language,
+        &faithful_rust_code,
+        &idiomatic_rust_code,
+        &output_style,
+        &post_processing,
+    );
     let generated_rust_code = match output_style {
         RustOutputStyle::Faithful => faithful_rust_code.clone(),
         RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
@@ -327,6 +346,7 @@ pub fn convert_source_to_rust_with_style(
         conversion_time_milliseconds,
         transpiler_engine,
         post_processing,
+        explanations,
     }
 }
 
@@ -691,5 +711,31 @@ pub unsafe fn main() {
         assert_eq!(rolled_back, faithful);
         assert_eq!(rejected.len(), 1);
         assert!(rejected[0].contains("broken_pass"));
+    }
+
+    #[test]
+    fn explains_std_vector_int_to_vec_i32_ownership_and_iteration() {
+        let cpp_source = r#"#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> nums = {1, 2, 3};
+    nums.push_back(4);
+    for (const auto& n : nums) {
+        std::cout << n << std::endl;
+    }
+    return 0;
+}"#;
+        let result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
+        let vec_expl = result
+            .explanations
+            .iter()
+            .find(|item| item.rust_equivalent == "Vec<i32>")
+            .expect("Expected Vec<i32> conversion explanation for std::vector<int>");
+        assert_eq!(vec_expl.cpp_pattern, "std::vector<int>");
+        assert!(vec_expl.why_chosen.contains("Vec<i32>"));
+        assert!(vec_expl.ownership_and_iteration.contains("&vec"));
+        assert!(vec_expl.ownership_and_iteration.contains("&mut vec"));
+        assert!(vec_expl.ownership_and_iteration.contains(".into_iter()"));
     }
 }

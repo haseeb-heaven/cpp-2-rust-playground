@@ -50,7 +50,16 @@ describe("App component", () => {
                 lineMappings: [],
                 diagnostics: [],
                 requiredImports: [],
-                conversionTimeMilliseconds: 2
+                conversionTimeMilliseconds: 2,
+                explanations: [
+                  {
+                    construct: "Dynamic Array (std::vector → Vec)",
+                    cppPattern: "std::vector<int>",
+                    rustEquivalent: "Vec<i32>",
+                    whyChosen: "Vec<i32> is Rust's growable contiguous heap array.",
+                    ownershipAndIteration: "Iterate immutably via &vec or mutably via &mut vec."
+                  }
+                ]
               }),
               { status: 200 }
             )
@@ -128,6 +137,11 @@ describe("App component", () => {
     fireEvent.click(convertButton);
     await waitFor(() => {
       expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("println!(\"ok\")");
+      expect(screen.getByTestId("output-explanation-summary")).toHaveTextContent("Vec<i32>");
     });
+
+    fireEvent.click(screen.getByTestId("explanations-tab"));
+    expect(screen.getByTestId("explanations-list")).toHaveTextContent("&vec");
+    expect(screen.getByTestId("explanations-list")).toHaveTextContent("&mut vec");
   });
 });

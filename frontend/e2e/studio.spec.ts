@@ -176,4 +176,40 @@ int main() {
       timeout: 15000
     });
   });
+
+  test("explains std::vector<int> -> Vec<i32> ownership and iteration in output and Why Rust tab", async ({
+    page
+  }) => {
+    await page.goto("/");
+
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill(`#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> values = {1, 2, 3};
+    values.push_back(4);
+    for (const auto& v : values) {
+        std::cout << v << std::endl;
+    }
+    return 0;
+}`);
+
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("Vec<i32>");
+    await expect(page.getByTestId("output-explanation-summary")).toContainText("std::vector<int>");
+    await expect(page.getByTestId("output-explanation-summary")).toContainText("Vec<i32>");
+    await expect(page.getByTestId("output-explanation-summary")).toContainText("&vec");
+
+    await page.getByTestId("explanations-tab").click();
+    const explanationsList = page.getByTestId("explanations-list");
+    await expect(explanationsList).toContainText("std::vector<int>");
+    await expect(explanationsList).toContainText("Vec<i32>");
+    await expect(explanationsList).toContainText("RAII Drop");
+    await expect(explanationsList).toContainText("&mut vec");
+  });
 });

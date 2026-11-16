@@ -92,6 +92,16 @@ pub struct PostProcessingSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConversionExplanation {
+    pub construct: String,
+    pub cpp_pattern: String,
+    pub rust_equivalent: String,
+    pub why_chosen: String,
+    pub ownership_and_iteration: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversionRequest {
     pub source_code: String,
     pub source_language: SourceLanguage,
@@ -112,6 +122,7 @@ pub struct ConversionResponse {
     pub conversion_time_milliseconds: u128,
     pub transpiler_engine: String,
     pub post_processing: PostProcessingSummary,
+    pub explanations: Vec<ConversionExplanation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

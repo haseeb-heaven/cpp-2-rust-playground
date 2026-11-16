@@ -42,6 +42,14 @@ export interface PostProcessingSummary {
   redundantCastsRemoved: number;
 }
 
+export interface ConversionExplanation {
+  construct: string;
+  cppPattern: string;
+  rustEquivalent: string;
+  whyChosen: string;
+  ownershipAndIteration: string;
+}
+
 export interface ConversionResponse {
   generatedRustCode: string;
   faithfulRustCode?: string;
@@ -53,6 +61,7 @@ export interface ConversionResponse {
   conversionTimeMilliseconds: number;
   transpilerEngine?: string;
   postProcessing?: PostProcessingSummary;
+  explanations?: ConversionExplanation[];
 }
 
 export interface ExecutionResponse {

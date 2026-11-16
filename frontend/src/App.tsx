@@ -23,6 +23,7 @@ import type {
   CodeExample,
   CompilerAvailability,
   ConversionDiagnostic,
+  ConversionExplanation,
   ConversionMode,
   EditorTheme,
   ExecutionLanguage,
@@ -93,6 +94,7 @@ export const App: React.FC = () => {
 
   const [lineMappings, setLineMappings] = useState<LineMapping[]>([]);
   const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnostic[]>([]);
+  const [conversionExplanations, setConversionExplanations] = useState<ConversionExplanation[]>([]);
   const [transpilerEngine, setTranspilerEngine] = useState<string>(
     sourceLanguage === "c"
       ? "c2rust (immunant/c2rust C99/C11 engine)"
@@ -165,6 +167,7 @@ export const App: React.FC = () => {
         .then((conversionResult) => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
+          setConversionExplanations(conversionResult.explanations ?? []);
           if (conversionResult.transpilerEngine) {
             setTranspilerEngine(conversionResult.transpilerEngine);
           }
@@ -618,6 +621,7 @@ export const App: React.FC = () => {
           lastExecutedLabel={lastExecutedLabel}
           isExecuting={isExecuting}
           conversionDiagnostics={conversionDiagnostics}
+          conversionExplanations={conversionExplanations}
           lineMappings={lineMappings}
           onSelectLineMapping={handleSelectLineMapping}
         />
