@@ -20,6 +20,7 @@ import type {
   ExecutionLanguage,
   ExecutionMode,
   ExecutionProvider,
+  RustOutputStyle,
   SourceLanguage
 } from "../types/studio";
 
@@ -28,6 +29,8 @@ interface ToolbarProps {
   onSourceLanguageChange: (language: SourceLanguage) => void;
   conversionMode: ConversionMode;
   onConversionModeChange: (mode: ConversionMode) => void;
+  outputStyle: RustOutputStyle;
+  onOutputStyleChange: (style: RustOutputStyle) => void;
   onConvertNow: () => void;
   executionProvider: ExecutionProvider;
   onExecutionProviderChange: (provider: ExecutionProvider) => void;
@@ -57,6 +60,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onSourceLanguageChange,
   conversionMode,
   onConversionModeChange,
+  outputStyle,
+  onOutputStyleChange,
   onConvertNow,
   executionProvider,
   onExecutionProviderChange,
@@ -115,6 +120,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         >
           <option value="live">Live Mode</option>
           <option value="manual">Manual Mode</option>
+        </select>
+
+        <select
+          className="theme-select"
+          value={outputStyle}
+          onChange={(event) => onOutputStyleChange(event.target.value as RustOutputStyle)}
+          aria-label="Rust output mode"
+          title="Idiomatic Rust: cleaned & rustc-verified Rust | Faithful Rust: original transpiler output"
+          data-testid="output-style-select"
+        >
+          <option value="idiomatic">Idiomatic Rust</option>
+          <option value="faithful">Faithful Rust</option>
         </select>
 
         <button

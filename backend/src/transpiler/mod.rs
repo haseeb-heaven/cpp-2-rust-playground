@@ -1,9 +1,13 @@
 pub mod diagnostics;
 pub mod line_translator;
+pub mod postprocessor;
 
-use crate::models::{ConversionResponse, LineMapping, SourceLanguage};
+use crate::models::{
+    ConversionResponse, LineMapping, RustOutputStyle, SourceLanguage,
+};
 use diagnostics::analyze_source_diagnostics;
 use line_translator::{translate_single_line, TranslatorState};
+use postprocessor::postprocess_rust_code;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,12 +16,12 @@ use std::time::Instant;
 
 static ENGINE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-struct TempEngineDirectory {
-    path: PathBuf,
+pub(crate) struct TempEngineDirectory {
+    pub(crate) path: PathBuf,
 }
 
 impl TempEngineDirectory {
-    fn create() -> std::io::Result<Self> {
+    pub(crate) fn create() -> std::io::Result<Self> {
         let id = ENGINE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "cpp2rust_playground_engine_{}_{}",
@@ -183,38 +187,56 @@ pub fn convert_source_to_rust(
     source_code: &str,
     source_language: &SourceLanguage,
 ) -> ConversionResponse {
+    convert_source_to_rust_with_style(source_code, source_language, RustOutputStyle::Idiomatic)
+}
+
+pub fn convert_source_to_rust_with_style(
+    source_code: &str,
+    source_language: &SourceLanguage,
+    output_style: RustOutputStyle,
+) -> ConversionResponse {
     let start_instant = Instant::now();
     let source_lines: Vec<&str> = source_code.lines().collect();
     let diagnostics = analyze_source_diagnostics(&source_lines);
 
     if let Some(binary_path) = detect_external_transpiler_binary(source_language) {
-        if let Some(external_rust) =
+        if let Some(faithful_rust_code) =
             try_invoke_external_backbone_engine(source_code, source_language, &binary_path)
         {
             let engine_label = match source_language {
                 SourceLanguage::C => format!("c2rust CLI ({})", binary_path),
                 SourceLanguage::Cpp => format!("cpp2rust CLI ({})", binary_path),
             };
-            let external_line_count = external_rust.lines().count().max(1);
+            let (idiomatic_rust_code, post_processing) =
+                postprocess_rust_code(&faithful_rust_code);
+            let generated_rust_code = match output_style {
+                RustOutputStyle::Faithful => faithful_rust_code.clone(),
+                RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
+            };
+            let selected_line_count = generated_rust_code.lines().count().max(1);
             let line_mappings = source_lines
                 .iter()
                 .enumerate()
                 .map(|(idx, line_text)| LineMapping {
                     source_line: idx + 1,
-                    rust_start_line: (idx + 1).min(external_line_count),
-                    rust_end_line: (idx + 1).min(external_line_count),
+                    rust_start_line: (idx + 1).min(selected_line_count),
+                    rust_end_line: (idx + 1).min(selected_line_count),
                     source_text: (*line_text).to_string(),
                     rust_text: String::new(),
                 })
                 .collect();
 
             return ConversionResponse {
-                generated_rust_code: external_rust,
+                generated_rust_code,
+                faithful_rust_code,
+                idiomatic_rust_code,
+                output_style,
                 line_mappings,
                 diagnostics,
                 required_imports: Vec::new(),
                 conversion_time_milliseconds: start_instant.elapsed().as_millis(),
                 transpiler_engine: engine_label,
+                post_processing,
             };
         }
     }
@@ -279,16 +301,32 @@ pub fn convert_source_to_rust(
         });
     }
 
-    let generated_rust_code = final_rust_lines.join("\n");
+    let faithful_rust_code = final_rust_lines.join("\n");
+    let (idiomatic_rust_code, post_processing) = postprocess_rust_code(&faithful_rust_code);
+    let generated_rust_code = match output_style {
+        RustOutputStyle::Faithful => faithful_rust_code.clone(),
+        RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
+    };
+    let max_line = generated_rust_code.lines().count().max(1);
+    if output_style == RustOutputStyle::Idiomatic {
+        for mapping in &mut line_mappings {
+            mapping.rust_start_line = mapping.rust_start_line.min(max_line);
+            mapping.rust_end_line = mapping.rust_end_line.min(max_line);
+        }
+    }
     let conversion_time_milliseconds = start_instant.elapsed().as_millis();
 
     ConversionResponse {
         generated_rust_code,
+        faithful_rust_code,
+        idiomatic_rust_code,
+        output_style,
         line_mappings,
         diagnostics,
         required_imports,
         conversion_time_milliseconds,
         transpiler_engine,
+        post_processing,
     }
 }
 
@@ -326,10 +364,11 @@ int main() {
     return 0;
 }"#;
         let result = convert_source_to_rust(c_source, &SourceLanguage::C);
-        assert!(result.generated_rust_code.contains("let mut sum: i32 = 0;"));
-        assert!(result.generated_rust_code.contains("for i in 0..5 {"));
+        assert!(result.faithful_rust_code.contains("let mut sum: i32 = 0;"));
+        assert!(result.faithful_rust_code.contains("for i in 0..5 {"));
+        assert!(result.idiomatic_rust_code.contains("for i in 0..5 {"));
         assert!(result
-            .generated_rust_code
+            .idiomatic_rust_code
             .contains("println!(\"Sum: {}\", sum);"));
     }
 
@@ -355,8 +394,11 @@ int main() {
             .contains("let mut numbers: Vec<i32> = vec![1, 2, 3];"));
         assert!(result.generated_rust_code.contains("numbers.push(4);"));
         assert!(result
-            .generated_rust_code
+            .faithful_rust_code
             .contains("let mut scores: HashMap<String, i32> = HashMap::new();"));
+        assert!(result
+            .idiomatic_rust_code
+            .contains("let scores: HashMap<String, i32> = HashMap::new();"));
     }
 
     #[test]
@@ -462,8 +504,11 @@ int main() {
         let result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
         assert!(result.diagnostics.is_empty());
         assert!(result
-            .generated_rust_code
+            .faithful_rust_code
             .contains("let mut fvec: Vec<f32> = Vec::new();"));
+        assert!(result
+            .idiomatic_rust_code
+            .contains("let mut fvec = Vec::new();"));
         assert!(result.generated_rust_code.contains("fvec.push(10.5_f32);"));
         assert!(result.generated_rust_code.contains("for vec in &mut fvec {"));
     }
@@ -504,14 +549,17 @@ bool IsValidNumber(char *p_input, int base) {
 }"#;
         let result = convert_source_to_rust(c_source, &SourceLanguage::C);
         assert!(result
-            .generated_rust_code
+            .faithful_rust_code
             .contains("// Forward declaration: bool IsValidNumber(char *p_input, int base);"));
         assert!(result
-            .generated_rust_code
+            .idiomatic_rust_code
             .contains("fn IsValidNumber(p_input: &str, base: i32) -> bool {"));
         assert!(result
-            .generated_rust_code
-            .contains("if base < 2 || base > 36 { return false; }"));
+            .idiomatic_rust_code
+            .contains("if base < 2 || base > 36 {"));
+        assert!(!result
+            .idiomatic_rust_code
+            .contains("// Forward declaration:"));
     }
 
     #[test]
@@ -557,11 +605,12 @@ int main() {
         let cpp_result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
         assert!(cpp_result.transpiler_engine.contains("cpp2rust"));
         assert!(cpp_result
-            .generated_rust_code
+            .faithful_rust_code
             .contains("let mut p: (i32, i32) = (3, 7);"));
-        assert!(cpp_result.generated_rust_code.contains("i32::MAX"));
-        assert!(cpp_result.generated_rust_code.contains("p.0"));
-        assert!(cpp_result.generated_rust_code.contains("p.1"));
+        assert!(cpp_result.idiomatic_rust_code.contains("let p: (i32, i32) = (3, 7);"));
+        assert!(cpp_result.idiomatic_rust_code.contains("i32::MAX"));
+        assert!(cpp_result.idiomatic_rust_code.contains("p.0"));
+        assert!(cpp_result.idiomatic_rust_code.contains("p.1"));
     }
 
     #[cfg(unix)]
@@ -606,5 +655,41 @@ int main() {
         )
         .expect("mock cpp2rust should return generated Rust");
         assert!(cpp_out.contains("from cpp2rust cli"));
+    }
+
+    #[test]
+    fn postprocesses_idiomatic_rust_formats_with_rustfmt_and_rejects_broken_transforms() {
+        let faithful = r#"// #include <stdio.h>
+// Forward declaration: int helper();
+pub unsafe fn main() {
+    let mut x: i32 = 42;
+    let mut idx: usize = 0;
+    let mut unused_count: libc::c_int = 7;
+    unsafe {
+        println!("{} {} {}", x, idx as usize, unused_count);
+    }
+    // return 0;
+}"#;
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified);
+        assert!(summary.formatted_with_rustfmt);
+        assert!(summary.unsafe_blocks_removed >= 1);
+        assert!(summary.redundant_mut_removed >= 2);
+        assert!(!idiomatic.contains("pub unsafe fn main"));
+        assert!(!idiomatic.contains("libc::c_int"));
+        assert!(!idiomatic.contains("idx as usize"));
+        assert!(!idiomatic.contains("// #include <stdio.h>"));
+
+        let mut rejected = Vec::new();
+        let (rolled_back, accepted) = postprocessor::verify_or_rollback_transformation(
+            faithful,
+            "fn main() { let broken = unknown_symbol_123(); }",
+            "broken_pass",
+            &mut rejected,
+        );
+        assert!(!accepted);
+        assert_eq!(rolled_back, faithful);
+        assert_eq!(rejected.len(), 1);
+        assert!(rejected[0].contains("broken_pass"));
     }
 }

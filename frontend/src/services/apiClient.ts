@@ -6,6 +6,7 @@ import type {
   ExecutionMode,
   ExecutionProvider,
   ExecutionResponse,
+  RustOutputStyle,
   SourceLanguage
 } from "../types/studio";
 
@@ -14,12 +15,13 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 export async function convertSourceCode(
   sourceCode: string,
   sourceLanguage: SourceLanguage,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  outputStyle: RustOutputStyle = "idiomatic"
 ): Promise<ConversionResponse> {
   const response = await fetch(`${API_BASE_URL}/api/convert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sourceCode, sourceLanguage }),
+    body: JSON.stringify({ sourceCode, sourceLanguage, outputStyle }),
     signal: abortSignal
   });
 

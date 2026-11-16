@@ -70,22 +70,48 @@ pub struct LineMapping {
     pub rust_text: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RustOutputStyle {
+    Faithful,
+    #[default]
+    Idiomatic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PostProcessingSummary {
+    pub applied_passes: Vec<String>,
+    pub rejected_passes: Vec<String>,
+    pub formatted_with_rustfmt: bool,
+    pub compiler_verified: bool,
+    pub unsafe_blocks_removed: usize,
+    pub redundant_mut_removed: usize,
+    pub redundant_casts_removed: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionRequest {
     pub source_code: String,
     pub source_language: SourceLanguage,
+    #[serde(default)]
+    pub output_style: RustOutputStyle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionResponse {
     pub generated_rust_code: String,
+    pub faithful_rust_code: String,
+    pub idiomatic_rust_code: String,
+    pub output_style: RustOutputStyle,
     pub line_mappings: Vec<LineMapping>,
     pub diagnostics: Vec<ConversionDiagnostic>,
     pub required_imports: Vec<String>,
     pub conversion_time_milliseconds: u128,
     pub transpiler_engine: String,
+    pub post_processing: PostProcessingSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -63,10 +63,10 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
             example.identifier, error_diagnostics
         );
 
-        let rust_result = execute_program(
+        let faithful_result = execute_program(
             &configuration,
             &ExecutionRequest {
-                code: conversion.generated_rust_code.clone(),
+                code: conversion.faithful_rust_code.clone(),
                 language: ExecutionLanguage::Rust,
                 mode: ExecutionMode::Run,
                 stdin_input: example.default_stdin.clone(),
@@ -76,9 +76,33 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
         .await;
 
         assert!(
-            rust_result.success,
-            "Example '{}' converted Rust failed to compile/run:\n{}\n--- Generated Rust ---\n{}",
-            example.identifier, rust_result.error_output, conversion.generated_rust_code
+            faithful_result.success,
+            "Example '{}' Faithful Rust failed to compile/run:\n{}\n--- Faithful Rust ---\n{}",
+            example.identifier, faithful_result.error_output, conversion.faithful_rust_code
+        );
+
+        let idiomatic_result = execute_program(
+            &configuration,
+            &ExecutionRequest {
+                code: conversion.idiomatic_rust_code.clone(),
+                language: ExecutionLanguage::Rust,
+                mode: ExecutionMode::Run,
+                stdin_input: example.default_stdin.clone(),
+                provider: Some(ExecutionProvider::Local),
+            },
+        )
+        .await;
+
+        assert!(
+            idiomatic_result.success,
+            "Example '{}' Idiomatic Rust failed to compile/run:\n{}\n--- Idiomatic Rust ---\n{}",
+            example.identifier, idiomatic_result.error_output, conversion.idiomatic_rust_code
+        );
+
+        assert!(
+            conversion.post_processing.compiler_verified,
+            "Example '{}' was not compiler_verified in post-processing",
+            example.identifier
         );
 
         if cfg!(target_arch = "x86_64")
@@ -90,12 +114,22 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
 
         assert_eq!(
             source_result.output.trim(),
-            rust_result.output.trim(),
-            "Output mismatch for example '{}'\nC/C++ output:\n{}\nRust output:\n{}\n--- Generated Rust ---\n{}",
+            faithful_result.output.trim(),
+            "Faithful Rust output mismatch for example '{}'\nC/C++ output:\n{}\nFaithful Rust output:\n{}\n--- Faithful Rust ---\n{}",
             example.identifier,
             source_result.output,
-            rust_result.output,
-            conversion.generated_rust_code
+            faithful_result.output,
+            conversion.faithful_rust_code
+        );
+
+        assert_eq!(
+            source_result.output.trim(),
+            idiomatic_result.output.trim(),
+            "Idiomatic Rust output mismatch for example '{}'\nC/C++ output:\n{}\nIdiomatic Rust output:\n{}\n--- Idiomatic Rust ---\n{}",
+            example.identifier,
+            source_result.output,
+            idiomatic_result.output,
+            conversion.idiomatic_rust_code
         );
     }
 }

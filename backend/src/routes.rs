@@ -5,7 +5,7 @@ use crate::models::{
     CodeExample, CompilerAvailability, ConversionRequest, ConversionResponse, ExecutionRequest,
     ExecutionResponse,
 };
-use crate::transpiler::convert_source_to_rust;
+use crate::transpiler::convert_source_to_rust_with_style;
 use axum::extract::State;
 use axum::http::Method;
 use axum::routing::{get, post};
@@ -54,7 +54,11 @@ async fn examples_list_handler() -> Json<Vec<CodeExample>> {
 async fn convert_code_handler(
     Json(payload): Json<ConversionRequest>,
 ) -> Json<ConversionResponse> {
-    let response = convert_source_to_rust(&payload.source_code, &payload.source_language);
+    let response = convert_source_to_rust_with_style(
+        &payload.source_code,
+        &payload.source_language,
+        payload.output_style,
+    );
     Json(response)
 }
 

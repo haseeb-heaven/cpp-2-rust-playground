@@ -30,6 +30,7 @@ import type {
   ExecutionProvider,
   ExecutionResponse,
   LineMapping,
+  RustOutputStyle,
   SourceLanguage
 } from "./types/studio";
 
@@ -110,6 +111,9 @@ export const App: React.FC = () => {
 
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [conversionMode, setConversionMode] = useState<ConversionMode>("live");
+  const [outputStyle, setOutputStyle] = useState<RustOutputStyle>("idiomatic");
+  const [faithfulRustCode, setFaithfulRustCode] = useState<string>(DEFAULT_RUST_CODE);
+  const [idiomaticRustCode, setIdiomaticRustCode] = useState<string>(DEFAULT_RUST_CODE);
   const [activeSourceLineNumber, setActiveSourceLineNumber] = useState<number>(1);
   const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>(
     savedWorkspace?.executionProvider ?? "local"
@@ -140,28 +144,49 @@ export const App: React.FC = () => {
   }, []);
 
   const runConversion = useCallback(
-    (codeToConvert: string, languageToConvert: SourceLanguage) => {
+    (
+      codeToConvert: string,
+      languageToConvert: SourceLanguage,
+      styleOverride?: RustOutputStyle
+    ) => {
       if (conversionAbortRef.current) {
         conversionAbortRef.current.abort();
       }
       const abortController = new AbortController();
       conversionAbortRef.current = abortController;
+      const effectiveStyle = styleOverride ?? outputStyle;
 
-      convertSourceCode(codeToConvert, languageToConvert, abortController.signal)
+      convertSourceCode(
+        codeToConvert,
+        languageToConvert,
+        abortController.signal,
+        effectiveStyle
+      )
         .then((conversionResult) => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
           if (conversionResult.transpilerEngine) {
             setTranspilerEngine(conversionResult.transpilerEngine);
           }
+          if (conversionResult.faithfulRustCode !== undefined) {
+            setFaithfulRustCode(conversionResult.faithfulRustCode);
+          }
+          if (conversionResult.idiomaticRustCode !== undefined) {
+            setIdiomaticRustCode(conversionResult.idiomaticRustCode);
+          }
+
+          const targetGenerated =
+            effectiveStyle === "faithful"
+              ? (conversionResult.faithfulRustCode ?? conversionResult.generatedRustCode)
+              : (conversionResult.idiomaticRustCode ?? conversionResult.generatedRustCode);
 
           const mergeResult = mergeIncrementalRustEdits(
             lastGeneratedRustCode,
-            conversionResult.generatedRustCode,
+            targetGenerated,
             rustCode,
             isRustManuallyEdited
           );
-          setLastGeneratedRustCode(conversionResult.generatedRustCode);
+          setLastGeneratedRustCode(targetGenerated);
           setRustCode(mergeResult.mergedRustCode);
         })
         .catch((error: unknown) => {
@@ -170,7 +195,36 @@ export const App: React.FC = () => {
           }
         });
     },
-    [lastGeneratedRustCode, rustCode, isRustManuallyEdited]
+    [lastGeneratedRustCode, rustCode, isRustManuallyEdited, outputStyle]
+  );
+
+  const handleOutputStyleChange = useCallback(
+    (nextStyle: RustOutputStyle) => {
+      setOutputStyle(nextStyle);
+      const cachedTarget =
+        nextStyle === "faithful" ? faithfulRustCode : idiomaticRustCode;
+      if (!isRustManuallyEdited && cachedTarget) {
+        setLastGeneratedRustCode(cachedTarget);
+        setRustCode(cachedTarget);
+      }
+      if (conversionMode === "live") {
+        const inputForMode = buildLineByLineConversionInput(
+          sourceCode,
+          activeSourceLineNumber
+        );
+        runConversion(inputForMode, sourceLanguage, nextStyle);
+      }
+    },
+    [
+      faithfulRustCode,
+      idiomaticRustCode,
+      isRustManuallyEdited,
+      conversionMode,
+      sourceCode,
+      activeSourceLineNumber,
+      sourceLanguage,
+      runConversion
+    ]
   );
 
   useEffect(() => {
@@ -498,6 +552,8 @@ export const App: React.FC = () => {
         onSourceLanguageChange={setSourceLanguage}
         conversionMode={conversionMode}
         onConversionModeChange={setConversionMode}
+        outputStyle={outputStyle}
+        onOutputStyleChange={handleOutputStyleChange}
         onConvertNow={handleConvertNow}
         executionProvider={executionProvider}
         onExecutionProviderChange={setExecutionProvider}

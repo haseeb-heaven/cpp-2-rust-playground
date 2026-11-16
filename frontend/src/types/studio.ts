@@ -3,6 +3,7 @@ export type ExecutionLanguage = "c" | "cpp" | "rust";
 export type ExecutionMode = "compile" | "run";
 export type ExecutionProvider = "local" | "online";
 export type ConversionMode = "live" | "manual";
+export type RustOutputStyle = "faithful" | "idiomatic";
 export type EditorTheme = "dark" | "light" | "midnight";
 export type DiagnosticSeverity = "error" | "warning" | "info";
 export type ErrorCategory =
@@ -31,13 +32,27 @@ export interface LineMapping {
   rustText: string;
 }
 
+export interface PostProcessingSummary {
+  appliedPasses: string[];
+  rejectedPasses: string[];
+  formattedWithRustfmt: boolean;
+  compilerVerified: boolean;
+  unsafeBlocksRemoved: number;
+  redundantMutRemoved: number;
+  redundantCastsRemoved: number;
+}
+
 export interface ConversionResponse {
   generatedRustCode: string;
+  faithfulRustCode?: string;
+  idiomaticRustCode?: string;
+  outputStyle?: RustOutputStyle;
   lineMappings: LineMapping[];
   diagnostics: ConversionDiagnostic[];
   requiredImports: string[];
   conversionTimeMilliseconds: number;
   transpilerEngine?: string;
+  postProcessing?: PostProcessingSummary;
 }
 
 export interface ExecutionResponse {

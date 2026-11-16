@@ -15,6 +15,10 @@ test.describe("RustC-Playground End-to-End Suite", () => {
     await page.getByTestId("example-c-loops-printf").click();
 
     await expect(page.getByTestId("rust-editor-pane")).toContainText("for index in 0..limit");
+    await page.getByTestId("output-style-select").selectOption("faithful");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("// #include <stdio.h>");
+    await page.getByTestId("output-style-select").selectOption("idiomatic");
+    await expect(page.getByTestId("rust-editor-pane")).not.toContainText("// #include <stdio.h>");
   });
 
   test("toggles Diff View, swaps panels, changes theme, and saves locally", async ({
@@ -59,11 +63,12 @@ int main(){
     return 0;
 }`);
 
-    await page.waitForTimeout(500);
-
-    const rustEditorText = await page.getByTestId("rust-editor-pane").innerText();
-    expect(rustEditorText).toContain("// [Preprocessor] #inlcude <iostream>");
-    expect(rustEditorText).toContain("let mut fvec: Vec<f32> = Vec::new();");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "// [Preprocessor] #inlcude <iostream>"
+    );
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "let mut fvec: Vec<f32> = Vec::new();"
+    );
 
     await page.getByTestId("diagnostics-tab").click();
     const diagnosticsList = page.getByTestId("diagnostics-list");
