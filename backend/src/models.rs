@@ -85,6 +85,7 @@ pub struct ConversionResponse {
     pub diagnostics: Vec<ConversionDiagnostic>,
     pub required_imports: Vec<String>,
     pub conversion_time_milliseconds: u128,
+    pub transpiler_engine: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

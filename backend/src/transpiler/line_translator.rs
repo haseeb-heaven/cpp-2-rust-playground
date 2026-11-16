@@ -426,6 +426,32 @@ pub fn map_cpp_type_to_rust(raw_type: &str, state: &mut TranslatorState) -> Stri
         return format!("Option<{}>", map_cpp_type_to_rust(inner, state));
     }
 
+    if let Some(inner) = extract_generic_inner(cleaned, "array")
+        .or_else(|| extract_generic_inner(cleaned, "std::array"))
+    {
+        let parts = split_top_level_comma(inner);
+        if parts.len() == 2 {
+            return format!(
+                "[{}; {}]",
+                map_cpp_type_to_rust(parts[0], state),
+                parts[1].trim()
+            );
+        }
+    }
+
+    if let Some(inner) = extract_generic_inner(cleaned, "pair")
+        .or_else(|| extract_generic_inner(cleaned, "std::pair"))
+    {
+        let parts = split_top_level_comma(inner);
+        if parts.len() == 2 {
+            return format!(
+                "({}, {})",
+                map_cpp_type_to_rust(parts[0], state),
+                map_cpp_type_to_rust(parts[1], state)
+            );
+        }
+    }
+
     if let Some(inner) = extract_generic_inner(cleaned, "unique_ptr")
         .or_else(|| extract_generic_inner(cleaned, "std::unique_ptr"))
     {
@@ -861,6 +887,8 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         ("std::max(", "std::cmp::max("),
         ("std::cout", ""),
         ("std::endl", "\"\\n\""),
+        ("std::make_pair(", "("),
+        ("make_pair(", "("),
         ("std::string(", "String::from("),
     ];
 
@@ -995,6 +1023,44 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         let strlen_regex = Regex::new(r"\bstrlen\s*\(([^)]+)\)").unwrap();
         updated = strlen_regex
             .replace_all(&updated, "$1.len() as i32")
+            .to_string();
+        let numeric_limits_regex =
+            Regex::new(r"(?:std::)?numeric_limits<\s*([^>]+?)\s*>::(max|min)\(\)").unwrap();
+        updated = numeric_limits_regex
+            .replace_all(&updated, |captures: &regex::Captures| {
+                let inner_c_type = captures.get(1).unwrap().as_str().trim();
+                let bound = captures.get(2).unwrap().as_str().to_uppercase();
+                let rust_t = match inner_c_type {
+                    "int" | "int32_t" => "i32",
+                    "double" | "long double" => "f64",
+                    "float" => "f32",
+                    "long" | "long long" | "int64_t" => "i64",
+                    "unsigned int" | "unsigned" | "uint32_t" => "u32",
+                    "unsigned long" | "unsigned long long" | "uint64_t" | "size_t" => "usize",
+                    other => other,
+                };
+                format!("{}::{}", rust_t, bound)
+            })
+            .to_string();
+        let abs_regex = Regex::new(
+            r"(^|[^.\w])(?:std::)?(?:abs|fabs|fabsf)\s*\(((?:[^()]|\([^()]*\))+)\)",
+        )
+        .unwrap();
+        updated = abs_regex.replace_all(&updated, "$1($2).abs()").to_string();
+        let sqrt_regex = Regex::new(
+            r"(^|[^.\w])(?:std::)?(?:sqrt|sqrtf)\s*\(((?:[^()]|\([^()]*\))+)\)",
+        )
+        .unwrap();
+        updated = sqrt_regex
+            .replace_all(&updated, "$1(($2) as f64).sqrt()")
+            .to_string();
+        updated = Regex::new(r"\.first\b")
+            .unwrap()
+            .replace_all(&updated, ".0")
+            .to_string();
+        updated = Regex::new(r"\.second\b")
+            .unwrap()
+            .replace_all(&updated, ".1")
             .to_string();
         for (macro_name, (branches, default_expr)) in &state.generic_macros {
             if updated.contains(macro_name) {

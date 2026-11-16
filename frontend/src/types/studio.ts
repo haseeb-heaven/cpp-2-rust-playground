@@ -37,6 +37,7 @@ export interface ConversionResponse {
   diagnostics: ConversionDiagnostic[];
   requiredImports: string[];
   conversionTimeMilliseconds: number;
+  transpilerEngine?: string;
 }
 
 export interface ExecutionResponse {

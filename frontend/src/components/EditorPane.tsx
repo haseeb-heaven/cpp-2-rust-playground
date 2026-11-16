@@ -17,6 +17,9 @@ interface EditorPaneProps {
   errorLines?: number[];
   onCursorLineChange?: (lineNumber: number) => void;
   badgeText?: string;
+  secondaryBadgeText?: string;
+  secondaryBadgeTitle?: string;
+  secondaryBadgeTestId?: string;
   testId: string;
 }
 
@@ -80,6 +83,9 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   errorLines = [],
   onCursorLineChange,
   badgeText,
+  secondaryBadgeText,
+  secondaryBadgeTitle,
+  secondaryBadgeTestId,
   testId
 }) => {
   const extensions = useMemo(() => {
@@ -99,6 +105,15 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     <section className="editor-pane" data-testid={testId}>
       <div className="pane-header">
         <span className="pane-title">{title}</span>
+        {secondaryBadgeText && (
+          <span
+            className="pane-badge"
+            title={secondaryBadgeTitle}
+            data-testid={secondaryBadgeTestId}
+          >
+            {secondaryBadgeText}
+          </span>
+        )}
         {badgeText && <span className="pane-badge">{badgeText}</span>}
       </div>
       <div className="pane-editor-container">

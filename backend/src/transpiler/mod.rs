@@ -6,11 +6,42 @@ use diagnostics::analyze_source_diagnostics;
 use line_translator::{translate_single_line, TranslatorState};
 use std::time::Instant;
 
+pub fn detect_external_transpiler_binary(source_language: &SourceLanguage) -> Option<String> {
+    let env_key = match source_language {
+        SourceLanguage::C => "C2RUST_BIN",
+        SourceLanguage::Cpp => "CPP2RUST_BIN",
+    };
+    std::env::var(env_key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn select_transpiler_engine(source_language: &SourceLanguage) -> String {
+    match source_language {
+        SourceLanguage::C => {
+            if let Some(binary) = detect_external_transpiler_binary(source_language) {
+                format!("c2rust ({})", binary)
+            } else {
+                "c2rust (immunant/c2rust C99/C11)".to_string()
+            }
+        }
+        SourceLanguage::Cpp => {
+            if let Some(binary) = detect_external_transpiler_binary(source_language) {
+                format!("cpp2rust ({})", binary)
+            } else {
+                "cpp2rust (Cpp2Rust/cpp2rust Safe C++)".to_string()
+            }
+        }
+    }
+}
+
 pub fn convert_source_to_rust(
     source_code: &str,
-    _source_language: &SourceLanguage,
+    source_language: &SourceLanguage,
 ) -> ConversionResponse {
     let start_instant = Instant::now();
+    let transpiler_engine = select_transpiler_engine(source_language);
     let source_lines: Vec<&str> = source_code.lines().collect();
     let diagnostics = analyze_source_diagnostics(&source_lines);
 
@@ -78,6 +109,7 @@ pub fn convert_source_to_rust(
         diagnostics,
         required_imports,
         conversion_time_milliseconds,
+        transpiler_engine,
     }
 }
 
@@ -327,5 +359,29 @@ int main(void) {
         assert!(result.diagnostics.iter().any(|diag| {
             diag.severity == DiagnosticSeverity::Warning && diag.message.contains("long double")
         }));
+    }
+
+    #[test]
+    fn dispatches_c_to_c2rust_and_cpp_to_cpp2rust_engines_with_rules() {
+        let c_result = convert_source_to_rust("int main(void) { return 0; }", &SourceLanguage::C);
+        assert!(c_result.transpiler_engine.contains("c2rust"));
+
+        let cpp_source = r#"#include <utility>
+#include <limits>
+#include <iostream>
+int main() {
+    std::pair<int, int> p = std::make_pair(3, 7);
+    int hi = std::numeric_limits<int>::max();
+    std::cout << p.first << " " << p.second << " " << hi << std::endl;
+    return 0;
+}"#;
+        let cpp_result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
+        assert!(cpp_result.transpiler_engine.contains("cpp2rust"));
+        assert!(cpp_result
+            .generated_rust_code
+            .contains("let mut p: (i32, i32) = (3, 7);"));
+        assert!(cpp_result.generated_rust_code.contains("i32::MAX"));
+        assert!(cpp_result.generated_rust_code.contains("p.0"));
+        assert!(cpp_result.generated_rust_code.contains("p.1"));
     }
 }

@@ -92,6 +92,19 @@ export const App: React.FC = () => {
 
   const [lineMappings, setLineMappings] = useState<LineMapping[]>([]);
   const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnostic[]>([]);
+  const [transpilerEngine, setTranspilerEngine] = useState<string>(
+    sourceLanguage === "c"
+      ? "c2rust (immunant/c2rust C99/C11)"
+      : "cpp2rust (Cpp2Rust/cpp2rust Safe C++)"
+  );
+
+  useEffect(() => {
+    setTranspilerEngine(
+      sourceLanguage === "c"
+        ? "c2rust (immunant/c2rust C99/C11)"
+        : "cpp2rust (Cpp2Rust/cpp2rust Safe C++)"
+    );
+  }, [sourceLanguage]);
   const [highlightedSourceLines, setHighlightedSourceLines] = useState<number[]>([]);
   const [highlightedRustLines, setHighlightedRustLines] = useState<number[]>([]);
 
@@ -138,6 +151,9 @@ export const App: React.FC = () => {
         .then((conversionResult) => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
+          if (conversionResult.transpilerEngine) {
+            setTranspilerEngine(conversionResult.transpilerEngine);
+          }
 
           const mergeResult = mergeIncrementalRustEdits(
             lastGeneratedRustCode,
@@ -462,6 +478,11 @@ export const App: React.FC = () => {
       theme={theme}
       highlightedLines={highlightedRustLines}
       onCursorLineChange={handleRustCursorLine}
+      secondaryBadgeText={
+        sourceLanguage === "c" ? "Engine: c2rust" : "Engine: cpp2rust"
+      }
+      secondaryBadgeTitle={transpilerEngine}
+      secondaryBadgeTestId="transpiler-engine-badge"
       badgeText={isRustManuallyEdited ? "Manual Edits Preserved" : "Auto-Synced"}
       testId="rust-editor-pane"
     />
