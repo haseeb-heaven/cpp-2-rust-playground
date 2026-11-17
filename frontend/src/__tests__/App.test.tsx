@@ -48,6 +48,11 @@ describe("App component", () => {
               JSON.stringify({
                 generatedRustCode:
                   "fn main() {\n    println!(\"ok\");\n}\n\n// --- Rust Translation Notes ---\n// [Dynamic Array] std::vector<int> -> Vec<i32>",
+                faithfulRustCode:
+                  "// #include <iostream>\nfn main() {\n    println!(\"faithful-ok\");\n}",
+                idiomaticRustCode:
+                  "fn main() {\n    println!(\"idiomatic-ok\");\n}\n\n// --- Rust Translation Notes ---\n// [Dynamic Array] std::vector<int> -> Vec<i32>",
+                outputStyle: "idiomatic",
                 lineMappings: [],
                 diagnostics: [],
                 requiredImports: [],
@@ -150,11 +155,33 @@ describe("App component", () => {
     const convertButton = screen.getByTestId("convert-now-button");
     fireEvent.click(convertButton);
     await waitFor(() => {
-      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("println!(\"ok\")");
+      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("idiomatic-ok");
       expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("Vec<i32>");
       expect(screen.getByTestId("transpiler-engine-badge")).toHaveTextContent("Regex Fallback");
     });
     expect(screen.queryByTestId("explanations-tab")).not.toBeInTheDocument();
     expect(screen.queryByTestId("output-explanation-summary")).not.toBeInTheDocument();
+  });
+
+  it("switches cleanly between Idiomatic Rust and Faithful Rust modes", async () => {
+    render(<App />);
+    const styleSelect = screen.getByTestId("output-style-select") as HTMLSelectElement;
+    expect(styleSelect.value).toBe("idiomatic");
+
+    fireEvent.change(styleSelect, { target: { value: "faithful" } });
+    expect(styleSelect.value).toBe("faithful");
+    await waitFor(() => {
+      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("faithful-ok");
+      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("// #include <iostream>");
+    });
+
+    fireEvent.change(styleSelect, { target: { value: "idiomatic" } });
+    expect(styleSelect.value).toBe("idiomatic");
+    await waitFor(() => {
+      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("idiomatic-ok");
+      expect(screen.getByTestId("rust-editor-pane")).not.toHaveTextContent(
+        "// #include <iostream>"
+      );
+    });
   });
 });

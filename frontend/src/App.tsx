@@ -132,6 +132,8 @@ export const App: React.FC = () => {
   const isDraggingSplitRef = useRef<boolean>(false);
   const debounceTimerRef = useRef<number | null>(null);
   const conversionAbortRef = useRef<AbortController | null>(null);
+  const outputStyleRef = useRef<RustOutputStyle>(outputStyle);
+  outputStyleRef.current = outputStyle;
 
   useEffect(() => {
     fetchPremadeExamples()
@@ -150,14 +152,15 @@ export const App: React.FC = () => {
     (
       codeToConvert: string,
       languageToConvert: SourceLanguage,
-      styleOverride?: RustOutputStyle
+      styleOverride?: RustOutputStyle,
+      forceOverwrite: boolean = false
     ) => {
       if (conversionAbortRef.current) {
         conversionAbortRef.current.abort();
       }
       const abortController = new AbortController();
       conversionAbortRef.current = abortController;
-      const effectiveStyle = styleOverride ?? outputStyle;
+      const effectiveStyle = styleOverride ?? outputStyleRef.current;
 
       convertSourceCode(
         codeToConvert,
@@ -186,14 +189,20 @@ export const App: React.FC = () => {
               ? (conversionResult.faithfulRustCode ?? conversionResult.generatedRustCode)
               : (conversionResult.idiomaticRustCode ?? conversionResult.generatedRustCode);
 
-          const mergeResult = mergeIncrementalRustEdits(
-            lastGeneratedRustCode,
-            targetGenerated,
-            rustCode,
-            isRustManuallyEdited
-          );
-          setLastGeneratedRustCode(targetGenerated);
-          setRustCode(mergeResult.mergedRustCode);
+          if (forceOverwrite || !isRustManuallyEdited) {
+            setLastGeneratedRustCode(targetGenerated);
+            setRustCode(targetGenerated);
+            setIsRustManuallyEdited(false);
+          } else {
+            const mergeResult = mergeIncrementalRustEdits(
+              lastGeneratedRustCode,
+              targetGenerated,
+              rustCode,
+              true
+            );
+            setLastGeneratedRustCode(targetGenerated);
+            setRustCode(mergeResult.mergedRustCode);
+          }
         })
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError") {
@@ -201,30 +210,34 @@ export const App: React.FC = () => {
           }
         });
     },
-    [lastGeneratedRustCode, rustCode, isRustManuallyEdited, outputStyle]
+    [lastGeneratedRustCode, rustCode, isRustManuallyEdited]
   );
+
+  const handleSourceCodeChange = useCallback((nextSource: string) => {
+    setSourceCode(nextSource);
+    setIsRustManuallyEdited(false);
+  }, []);
 
   const handleOutputStyleChange = useCallback(
     (nextStyle: RustOutputStyle) => {
       setOutputStyle(nextStyle);
+      outputStyleRef.current = nextStyle;
+      setIsRustManuallyEdited(false);
       const cachedTarget =
         nextStyle === "faithful" ? faithfulRustCode : idiomaticRustCode;
-      if (!isRustManuallyEdited && cachedTarget) {
+      if (cachedTarget) {
         setLastGeneratedRustCode(cachedTarget);
         setRustCode(cachedTarget);
       }
-      if (conversionMode === "live") {
-        const inputForMode = buildLineByLineConversionInput(
-          sourceCode,
-          activeSourceLineNumber
-        );
-        runConversion(inputForMode, sourceLanguage, nextStyle);
-      }
+      const inputForMode =
+        conversionMode === "live"
+          ? buildLineByLineConversionInput(sourceCode, activeSourceLineNumber)
+          : sourceCode;
+      runConversion(inputForMode, sourceLanguage, nextStyle, true);
     },
     [
       faithfulRustCode,
       idiomaticRustCode,
-      isRustManuallyEdited,
       conversionMode,
       sourceCode,
       activeSourceLineNumber,
@@ -272,7 +285,8 @@ export const App: React.FC = () => {
       window.clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
-    runConversion(sourceCode, sourceLanguage);
+    setIsRustManuallyEdited(false);
+    runConversion(sourceCode, sourceLanguage, outputStyleRef.current, true);
   }, [runConversion, sourceCode, sourceLanguage]);
 
   const handleRustEditorChange = useCallback(
@@ -519,7 +533,7 @@ export const App: React.FC = () => {
       title={sourceLanguage === "c" ? "C Source" : "C++ Source"}
       language="cpp"
       value={sourceCode}
-      onChange={setSourceCode}
+      onChange={handleSourceCodeChange}
       theme={theme}
       highlightedLines={highlightedSourceLines}
       errorLines={sourceErrorLines}

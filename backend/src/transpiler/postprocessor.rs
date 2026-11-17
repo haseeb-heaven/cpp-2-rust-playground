@@ -491,10 +491,135 @@ fn remove_redundant_casts_and_parens(code: &str) -> (String, usize, bool) {
     (updated, cast_count, changed)
 }
 
+fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
+    let original = code.to_string();
+    let mut lines: Vec<String> = code.lines().map(|l| l.to_string()).collect();
+
+    loop {
+        let mut unwrapped = false;
+        let mut i = 0;
+        while i < lines.len() {
+            if lines[i].trim() == "if true {" {
+                let mut depth = 1isize;
+                let mut close_idx = None;
+                for (j, line) in lines.iter().enumerate().skip(i + 1) {
+                    for ch in line.chars() {
+                        if ch == '{' {
+                            depth += 1;
+                        } else if ch == '}' {
+                            depth -= 1;
+                        }
+                    }
+                    if depth == 0 && line.trim() == "}" {
+                        close_idx = Some(j);
+                        break;
+                    }
+                }
+                if let Some(j) = close_idx {
+                    let has_else_after = lines
+                        .get(j + 1)
+                        .is_some_and(|next| next.trim().starts_with("else"));
+                    if !has_else_after {
+                        lines.remove(j);
+                        lines.remove(i);
+                        unwrapped = true;
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+        if !unwrapped {
+            break;
+        }
+    }
+
+    let box_default_line_re = Regex::new(
+        r"^\s*let\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*Box<([^>]+)>\s*=\s*Box::new\(Default::default\(\)\);\s*$",
+    )
+    .unwrap();
+    let deref_init_line_re =
+        Regex::new(r"^\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);\s*$").unwrap();
+
+    let mut idx = 0;
+    while idx < lines.len() {
+        if let Some(decl_cap) = box_default_line_re.captures(&lines[idx]) {
+            let var_name = decl_cap.get(1).unwrap().as_str();
+            let box_type = decl_cap.get(2).unwrap().as_str().trim();
+            let mut next_idx = idx + 1;
+            while next_idx < lines.len() && lines[next_idx].trim().is_empty() {
+                next_idx += 1;
+            }
+            if next_idx < lines.len() {
+                if let Some(assign_cap) = deref_init_line_re.captures(&lines[next_idx]) {
+                    if assign_cap.get(1).unwrap().as_str() == var_name {
+                        let expr = assign_cap.get(2).unwrap().as_str().trim();
+                        let self_ref_re =
+                            Regex::new(&format!(r"\b{}\b", regex::escape(var_name))).unwrap();
+                        if !self_ref_re.is_match(expr) {
+                            let indent: String = lines[idx]
+                                .chars()
+                                .take_while(|c| c.is_whitespace())
+                                .collect();
+                            lines[idx] = format!(
+                                "{}let mut {}: Box<{}> = Box::new({});",
+                                indent, var_name, box_type, expr
+                            );
+                            lines.remove(next_idx);
+                        }
+                    }
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    let drop_line_re = Regex::new(r"^\s*drop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$").unwrap();
+    if let Some(main_idx) = lines.iter().position(|l| l.trim() == "fn main() {") {
+        let mut depth = 0isize;
+        let mut main_end_idx = None;
+        for (k, line) in lines.iter().enumerate().skip(main_idx) {
+            for ch in line.chars() {
+                if ch == '{' {
+                    depth += 1;
+                } else if ch == '}' {
+                    depth -= 1;
+                }
+            }
+            if depth == 0 && k > main_idx {
+                main_end_idx = Some(k);
+                break;
+            }
+        }
+        if let Some(end_k) = main_end_idx {
+            let mut prev_k = end_k.saturating_sub(1);
+            while prev_k > main_idx && lines[prev_k].trim().is_empty() {
+                prev_k -= 1;
+            }
+            if prev_k > main_idx && drop_line_re.is_match(&lines[prev_k]) {
+                lines.remove(prev_k);
+            }
+        }
+    }
+
+    let updated = lines.join("\n");
+    let changed = updated != original;
+    (updated, changed)
+}
+
 fn is_variable_mutated(code: &str, var_name: &str) -> bool {
     let escaped = regex::escape(var_name);
     let mut_ref_re = Regex::new(&format!(r"&\s*mut\s+{}\b", escaped)).unwrap();
     if mut_ref_re.is_match(code) {
+        return true;
+    }
+
+    let deref_assign_re = Regex::new(&format!(
+        r"\*\s*{}\s*(?:[+\-*/%&|^]|<<|>>)?=[^=]",
+        escaped
+    ))
+    .unwrap();
+    if deref_assign_re.is_match(code) {
         return true;
     }
 
@@ -677,6 +802,14 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
         summary
             .applied_passes
             .push("idiomatic_types_and_safe_abstractions".to_string());
+    }
+
+    let (box_simplified, box_changed) = simplify_idiomatic_box_and_null_checks(&candidate);
+    if box_changed {
+        candidate = box_simplified;
+        summary
+            .applied_passes
+            .push("simplify_box_and_null_checks".to_string());
     }
 
     let (cast_cleaned, cast_removed, cast_changed) = remove_redundant_casts_and_parens(&candidate);

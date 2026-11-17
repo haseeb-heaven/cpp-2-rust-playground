@@ -237,16 +237,29 @@ if (p != NULL) {
   return 0;
 }`);
 
+    await page.getByTestId("output-style-select").selectOption("idiomatic");
     await expect(page.getByTestId("rust-editor-pane")).toContainText(
-      "let mut p: Box<i32> = Box::new(Default::default());"
+      "let p: Box<i32> = Box::new(100);"
     );
     await expect(page.getByTestId("rust-editor-pane")).not.toContainText("Box<int>");
     await expect(page.getByTestId("rust-editor-pane")).not.toContainText("p != None");
+    await expect(page.getByTestId("rust-editor-pane")).not.toContainText("drop(p);");
     await expect(page.getByTestId("rust-editor-pane")).toContainText(
       "// --- Rust Translation Notes"
     );
 
     await page.getByTestId("provider-select").selectOption("local");
+    await page.getByTestId("run-rust-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("VALUE of p is 100", {
+      timeout: 15000
+    });
+
+    await page.getByTestId("output-style-select").selectOption("faithful");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "let mut p: Box<i32> = Box::new(Default::default());"
+    );
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("if true {");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("drop(p);");
     await page.getByTestId("run-rust-button").click();
     await expect(page.getByTestId("program-output")).toContainText("VALUE of p is 100", {
       timeout: 15000

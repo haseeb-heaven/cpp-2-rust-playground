@@ -900,20 +900,51 @@ if (p != NULL) {
 }
   return 0;
 }"#;
-        let result = convert_source_to_rust(c_source, &SourceLanguage::C);
+        let faithful = convert_source_to_rust_with_style(
+            c_source,
+            &SourceLanguage::C,
+            RustOutputStyle::Faithful,
+        );
+        assert_eq!(faithful.output_style, RustOutputStyle::Faithful);
+        assert!(faithful.generated_rust_code.contains("// #include <stdlib.h>"));
         assert!(
-            result
+            faithful
                 .generated_rust_code
                 .contains("let mut p: Box<i32> = Box::new(Default::default());"),
-            "Expected Box<i32> declaration, got:\n{}",
-            result.generated_rust_code
+            "Expected Faithful Box<i32> declaration, got:\n{}",
+            faithful.generated_rust_code
         );
-        assert!(!result.generated_rust_code.contains("Box<int>"));
-        assert!(!result.generated_rust_code.contains("p != None"));
-        assert!(result.post_processing.compiler_verified);
-        assert!(result
+        assert!(faithful.generated_rust_code.contains("if true {"));
+        assert!(faithful.generated_rust_code.contains("*p = 100;"));
+        assert!(faithful.generated_rust_code.contains("drop(p);"));
+        assert!(faithful.generated_rust_code.contains("// return 0;"));
+        assert!(!faithful.generated_rust_code.contains("Box<int>"));
+        assert!(!faithful.generated_rust_code.contains("p != None"));
+        assert!(faithful.post_processing.compiler_verified);
+
+        let idiomatic = convert_source_to_rust_with_style(
+            c_source,
+            &SourceLanguage::C,
+            RustOutputStyle::Idiomatic,
+        );
+        assert_eq!(idiomatic.output_style, RustOutputStyle::Idiomatic);
+        assert!(
+            idiomatic
+                .generated_rust_code
+                .contains("let p: Box<i32> = Box::new(100);"),
+            "Expected Idiomatic folded Box<i32>, got:\n{}",
+            idiomatic.generated_rust_code
+        );
+        assert!(!idiomatic.generated_rust_code.contains("// #include"));
+        assert!(!idiomatic.generated_rust_code.contains("if true"));
+        assert!(!idiomatic.generated_rust_code.contains("Default::default()"));
+        assert!(!idiomatic.generated_rust_code.contains("drop(p);"));
+        assert!(!idiomatic.generated_rust_code.contains("Box<int>"));
+        assert!(!idiomatic.generated_rust_code.contains("p != None"));
+        assert!(idiomatic.post_processing.compiler_verified);
+        assert!(idiomatic
             .generated_rust_code
             .contains("// --- Rust Translation Notes"));
-        assert!(result.generated_rust_code.contains("Box<i32>"));
+        assert!(idiomatic.generated_rust_code.contains("Box<i32>"));
     }
 }

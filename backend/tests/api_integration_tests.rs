@@ -183,3 +183,70 @@ async fn execute_endpoint_uses_local_compiler_when_local_provider_selected() {
         .unwrap()
         .starts_with("local ("));
 }
+
+#[tokio::test]
+async fn convert_endpoint_respects_faithful_and_idiomatic_output_style_modes() {
+    let source = "#include <stdlib.h>\n#include <stdio.h>\n\nint main() {\n    int *p = malloc(sizeof(int));\n    if (p != NULL) {\n        *p = 100;\n        printf(\"VALUE of p is %d\\n\", *p);\n        free(p);\n    }\n    return 0;\n}";
+
+    let app_faithful = create_application_router(test_configuration());
+    let faithful_res = app_faithful
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "sourceCode": source,
+                        "sourceLanguage": "c",
+                        "outputStyle": "faithful"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(faithful_res.status(), StatusCode::OK);
+    let faithful_body = faithful_res.into_body().collect().await.unwrap().to_bytes();
+    let faithful_json: Value = serde_json::from_slice(&faithful_body).unwrap();
+    assert_eq!(faithful_json["outputStyle"], "faithful");
+    let faithful_code = faithful_json["generatedRustCode"].as_str().unwrap();
+    assert!(faithful_code.contains("// #include <stdlib.h>"));
+    assert!(faithful_code.contains("let mut p: Box<i32> = Box::new(Default::default());"));
+    assert!(faithful_code.contains("drop(p);"));
+
+    let app_idiomatic = create_application_router(test_configuration());
+    let idiomatic_res = app_idiomatic
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "sourceCode": source,
+                        "sourceLanguage": "c",
+                        "outputStyle": "idiomatic"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(idiomatic_res.status(), StatusCode::OK);
+    let idiomatic_body = idiomatic_res
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let idiomatic_json: Value = serde_json::from_slice(&idiomatic_body).unwrap();
+    assert_eq!(idiomatic_json["outputStyle"], "idiomatic");
+    let idiomatic_code = idiomatic_json["generatedRustCode"].as_str().unwrap();
+    assert!(idiomatic_code.contains("let p: Box<i32> = Box::new(100);"));
+    assert!(!idiomatic_code.contains("// #include <stdlib.h>"));
+    assert!(!idiomatic_code.contains("if true"));
+    assert!(!idiomatic_code.contains("drop(p);"));
+}
