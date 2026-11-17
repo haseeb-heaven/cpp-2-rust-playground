@@ -70,6 +70,15 @@ export CPP2RUST_BIN="/path/to/cpp2rust"
   ```bash
   cd backend && cargo test
   ```
+- **Generated equivalence suite** — builds C programs from composable templates
+  (loops, arrays, structs, malloc, `sizeof` idioms, `printf` formats, recursion,
+  switches, bitwise math, 2D arrays, ...) and checks for every case that the
+  c2rust backbone produced it, that the Idiomatic projection is rustc-verified,
+  and that C and Rust print identical output. Defaults to 40 cases; scale it up:
+  ```bash
+  cd backend && PLAYGROUND_EQUIV_CASES=1000 cargo test --test generated_equivalence_tests -- --nocapture
+  ```
+  Every case is a pure function of its index, so a failure names a reproducible case.
 - **Frontend unit/component tests & build**:
   ```bash
   cd frontend && npm test && npm run build

@@ -671,11 +671,17 @@ pub fn convert_source_to_rust_with_style(
                 }
             }
             Err(err_msg) => {
+                let clipped: String = err_msg.chars().take(160).collect();
                 fallback_reason = Some(format!(
                     "External {} CLI failed ({}); used built-in regex-based fallback translator.",
                     cli_name, err_msg
                 ));
-                (fallback_label, true)
+                (
+                    format!("Built-in Regex {} Fallback ({} CLI failed: {})",
+                        match source_language { SourceLanguage::C => "C", SourceLanguage::Cpp => "C++" },
+                        cli_name, clipped),
+                    true,
+                )
             }
         }
     } else {
@@ -1740,15 +1746,18 @@ int main(void) {
                 "c2rust Faithful output for the dijkstra program must compile"
             );
 
-            // Idiomatic is the compiler-verified readability normalization of that output.
-            assert!(
-                res.post_processing.compiler_verified,
-                "translated c2rust dijkstra program must pass rustc verification: {:?}",
-                res.post_processing.verification_error
-            );
-            assert!(!res.generated_rust_code.contains("::core::ffi::c_int"));
-            assert!(!res.generated_rust_code.contains("#[no_mangle]"));
-            assert!(res.generated_rust_code.contains("dijkstra_shortest_path"));
+            // This program's translation still needs malloc/free and raw pointers, so
+            // it is raw C-shaped Rust: available in Faithful, never shown as Idiomatic.
+            assert!(!res.post_processing.compiler_verified);
+            assert!(res
+                .post_processing
+                .verification_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("raw engine transcription"));
+            assert!(res.faithful_rust_code.contains("dijkstra_shortest_path"));
+            assert!(!res.generated_rust_code.contains("unsafe"));
+            assert!(res.generated_rust_code.contains("Idiomatic Rust is unavailable"));
         }
     }
 
@@ -2160,12 +2169,16 @@ int main() {
             "{:?}",
             result.post_processing.verification_error
         );
-        assert!(!result.generated_rust_code.contains("::core::ffi::c_int"));
-        assert!(!result.generated_rust_code.contains("::core::ffi::c_char"));
+        assert!(!result.generated_rust_code.contains("::core::ffi"));
+        assert!(!result.generated_rust_code.contains("unsafe"));
+        assert!(!result.generated_rust_code.contains("extern \"C\""));
+        assert!(!result.generated_rust_code.contains("malloc"));
         assert!(!result.generated_rust_code.contains("#[no_mangle]"));
+        assert!(result
+            .generated_rust_code
+            .contains("let mut arr: Vec<i32> = vec![Default::default(); 4];"));
         assert!(result.generated_rust_code.contains("print!(\"{}\","));
         assert!(result.generated_rust_code.contains("fn main()"));
-        assert!(result.generated_rust_code.contains("unsafe { main_0() }"));
     }
 
     #[test]

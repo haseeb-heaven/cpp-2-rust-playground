@@ -161,11 +161,26 @@ fn contains_engine_runtime_scaffolding(code: &str) -> bool {
         || code.contains("__cpp2rust_init_globals")
 }
 
+/// Idiomatic output is plain safe Rust: no `unsafe`, no `extern "C"`, no C ABI
+/// types, no libc/engine calls. Anything that still needs them is a raw
+/// transcription and belongs in Faithful mode only.
+fn contains_unsafe_or_c_interop(code: &str) -> bool {
+    static C_INTEROP_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?m)\bunsafe\b|\bextern\s*\"C\"|#\[no_mangle\]|::core::ffi|\bno_mangle\b|\bfrom_raw\b|\btransmute\b"#,
+        )
+        .unwrap()
+    });
+    C_INTEROP_REGEX.is_match(code)
+}
+
 /// Text that is still a literal transcription of the C source: C ABI types the
 /// normalizer failed to rewrite, or engine plumbing. Accepting it as Idiomatic
 /// would claim a human-readable translation that was never produced.
 fn still_raw_engine_transcription(faithful_rust: &str, idiomatic_candidate: &str) -> bool {
-    if contains_engine_runtime_scaffolding(idiomatic_candidate) {
+    if contains_engine_runtime_scaffolding(idiomatic_candidate)
+        || contains_unsafe_or_c_interop(idiomatic_candidate)
+    {
         return true;
     }
     idiomatic_candidate == faithful_rust
@@ -410,10 +425,12 @@ fn lower_printf_calls(code: &str) -> (String, bool) {
         };
 
         let macro_name = if println { "println!" } else { "print!" };
+        let placeholder_count = format.matches('{').count();
         let operands: Vec<&str> = arguments[1..]
             .iter()
             .copied()
             .filter(|argument| !argument.is_empty())
+            .take(placeholder_count)
             .collect();
         if operands.is_empty() {
             result.push_str(&format!("{macro_name}(\"{format}\")"));
@@ -451,6 +468,46 @@ fn split_ffi_declaration_items(body: &str) -> Vec<&str> {
         items.push(&body[start..]);
     }
     items
+}
+
+/// Drops generated C-header type aliases and constants that nothing references
+/// any more (for example `__DARWIN_NULL`, which carries `c_void` but is dead once
+/// the pointer it described became an owned `Vec`).
+fn prune_unused_c_type_declarations(code: &str) -> (String, bool) {
+    static DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^\s*pub\s+(?:const|type)\s+([A-Za-z_][A-Za-z0-9_]*)\s*[:=][^;]*;\s*$").unwrap()
+    });
+
+    let mut changed = false;
+    let mut updated = code.to_string();
+    loop {
+        let snapshot = updated.clone();
+        let analysis = code_without_literals(&snapshot);
+        let mut removed_any = false;
+        let mut result = String::with_capacity(snapshot.len());
+        let mut cursor = 0usize;
+        for captures in DECL_REGEX.captures_iter(&snapshot) {
+            let whole = captures.get(0).unwrap();
+            let name = &captures[1];
+            let mentions = Regex::new(&format!(r"\b{}\b", regex::escape(name)))
+                .map(|pattern| pattern.find_iter(&analysis).count())
+                .unwrap_or(usize::MAX);
+            if mentions > 1 {
+                continue; // declaration + at least one real use
+            }
+            result.push_str(&snapshot[cursor..whole.start()]);
+            cursor = whole.end();
+            removed_any = true;
+        }
+        result.push_str(&snapshot[cursor..]);
+        if !removed_any {
+            break;
+        }
+        updated = result;
+        changed = true;
+    }
+
+    (updated, changed)
 }
 
 /// Drops `extern "C"` declarations that nothing calls any more, and the whole
@@ -513,6 +570,414 @@ fn prune_unused_c_ffi_blocks(code: &str) -> (String, bool) {
     }
     result.push_str(remaining);
     (result, changed)
+}
+
+/// Masks string/char literals and comments so identifier analysis is not fooled
+/// by text that merely mentions a name.
+fn code_without_literals(code: &str) -> String {
+    static LITERAL_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"(?s)/\*.*?\*/|//[^\n]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#).unwrap()
+    });
+    LITERAL_REGEX.replace_all(code, " ").to_string()
+}
+
+/// Turns `if true { .. }` into a plain block, but only when there is no `else`
+/// branch (dropping the condition of an `if/else` would change the program).
+fn collapse_true_blocks(code: &str) -> (String, bool) {
+    static TRUE_IF_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bif\s+true\s*\{").unwrap());
+    let mut updated = code.to_string();
+    let mut changed = false;
+
+    loop {
+        let snapshot = updated.clone();
+        let mut target: Option<(usize, usize)> = None;
+        for found in TRUE_IF_REGEX.find_iter(&snapshot) {
+            let brace = found.end() - 1;
+            let Some(close) = find_matching_delimiter(&snapshot, brace, '{', '}') else {
+                continue;
+            };
+            let rest = snapshot[close + 1..].trim_start();
+            if rest.starts_with("else") {
+                continue;
+            }
+            target = Some((found.start(), close + 1));
+            break;
+        }
+        let Some((start, end)) = target else {
+            break;
+        };
+        let inner = snapshot[start..end]
+            .trim_start_matches("if")
+            .trim_start()
+            .trim_start_matches("true")
+            .trim_start()
+            .to_string();
+        updated = format!("{}{}{}", &snapshot[..start], inner, &snapshot[end..]);
+        changed = true;
+    }
+
+    (updated, changed)
+}
+
+/// Lowers `puts`/`fputs(stdout, ...)` on a known byte-string literal.
+fn lower_puts_literals(code: &str) -> (String, bool) {
+    static PUTS_LITERAL_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?s)\bputs\s*\(\s*b"((?:[^"\\]|\\.)*)"\s*(?:as\s+\*const\s+u8\s+as\s+\*const\s+(?:::core::ffi::)?(?:c_char|i8))?\s*\)"#,
+        )
+        .unwrap()
+    });
+
+    let mut changed = false;
+    let updated = PUTS_LITERAL_REGEX
+        .replace_all(code, |captures: &regex::Captures| {
+            let body = captures[1]
+                .strip_suffix("\\0")
+                .unwrap_or(&captures[1])
+                .to_string();
+            changed = true;
+            // `puts` always terminates the line, so a trailing `\n` just becomes
+            // `println!` without doubling the newline.
+            match body.strip_suffix("\\n") {
+                Some(rest) => format!("println!(\"{rest}\")"),
+                None => format!("println!(\"{body}\")"),
+            }
+        })
+        .to_string();
+
+    (updated, changed)
+}
+
+/// Lowers the classic C line-input/output trio on a fixed `char` buffer while
+/// keeping the C buffer-size semantics:
+///
+/// ```text
+/// char data[10]; gets(data); puts(data);
+/// ```
+///
+/// becomes a fixed `[u8; 10]` buffer read with `stdin().lock().take(len).read(..)`
+/// and printed through `String::from_utf8_lossy`. The rewrite applies only when
+/// the buffer is used exclusively by those calls, so no other code can observe
+/// the raw bytes; otherwise the C-style code is left untouched.
+fn lower_char_buffer_stdio(code: &str) -> (String, bool) {
+    static BUFFER_DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?m)^(\s*)let\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\[(?:i8|u8);\s*(\d+)\]\s*=\s*\[0(?:i8|u8)?;\s*\d+\];",
+        )
+        .unwrap()
+    });
+
+    let mut updated = code.to_string();
+    let mut changed = false;
+
+    loop {
+        let mut applied_this_round = false;
+        for captures in BUFFER_DECL_REGEX.captures_iter(&updated.clone()) {
+            let whole = captures.get(0).unwrap();
+            let indent = captures[1].to_string();
+            let name = captures[2].to_string();
+            let length = captures[3].to_string();
+
+            let escaped = regex::escape(&name);
+            let read_regex = Regex::new(&format!(
+                r"(?:gets\s*\(\s*|fgets\s*\(\s*)&raw\s+mut\s+{escaped}\s+as\s*\*mut\s*(?:i8|u8)(?:\s*,\s*\d+\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?\s*\)"
+            ))
+            .unwrap();
+            let write_regex = Regex::new(&format!(
+                r"puts\s*\(\s*&raw\s+(?:mut|const)\s+{escaped}\s+as\s*\*(?:mut|const)\s*(?:i8|u8)\s*\)"
+            ))
+            .unwrap();
+
+            if !read_regex.is_match(&updated) {
+                continue;
+            }
+
+            // Every use of the buffer must be one of the lowered calls.
+            let all_uses = Regex::new(&format!(r"\b{escaped}\b"))
+                .unwrap()
+                .find_iter(&updated)
+                .count();
+            let handled_uses = read_regex.find_iter(&updated).count()
+                + write_regex.find_iter(&updated).count();
+            if all_uses != handled_uses + 1 {
+                // one occurrence is the declaration itself
+                continue;
+            }
+
+            let counter = format!("__read_{name}");
+            let mut rewritten = sentence_replace(
+                &updated,
+                whole.as_str(),
+                &format!(
+                    "{indent}let mut {name}: [u8; {length}] = [0u8; {length}];\n{indent}let mut {counter}: usize = 0;"
+                ),
+            );
+            rewritten = read_regex
+                .replace_all(
+                    &rewritten,
+                    format!(
+                        "{counter} = {{\n        use std::io::Read as _;\n        std::io::stdin()\n            .lock()\n            .take({name}.len() as u64)\n            .read(&mut {name})\n            .expect(\"read stdin\")\n    }}"
+                    )
+                    .as_str(),
+                )
+                .to_string();
+            rewritten = write_regex
+                .replace_all(
+                    &rewritten,
+                    format!(
+                        "println!(\"{{}}\", String::from_utf8_lossy(&{name}[..{counter}]).trim_end())"
+                    )
+                    .as_str(),
+                )
+                .to_string();
+
+            updated = rewritten;
+            changed = true;
+            applied_this_round = true;
+            break;
+        }
+        if !applied_this_round {
+            break;
+        }
+    }
+
+    (updated, changed)
+}
+
+fn sentence_replace(haystack: &str, needle: &str, replacement: &str) -> String {
+    match haystack.find(needle) {
+        Some(position) => {
+            let mut output = String::with_capacity(haystack.len());
+            output.push_str(&haystack[..position]);
+            output.push_str(replacement);
+            output.push_str(&haystack[position + needle.len()..]);
+            output
+        }
+        None => haystack.to_string(),
+    }
+}
+
+/// Lowers a single C heap allocation that behaves like an array into a `Vec`.
+///
+/// c2rust turns `int *arr = malloc(sizeof(int) * n);` into a raw pointer with
+/// `offset`/deref arithmetic and a `free`. When every use of that pointer is the
+/// allocation, indexed access, a null check, and `free`, the owned `Vec` is an
+/// exact replacement and the result is plain safe Rust. Anything else (pointer
+/// passed to a function, `realloc`, aliasing) keeps the C-shaped code for the
+/// Faithful view.
+fn lower_malloc_arrays_to_vec(code: &str) -> (String, bool) {
+    static MALLOC_DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?m)^(\s*)let\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\*mut\s*(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|usize|isize|bool)\s*=\s*([^;]*);",
+        )
+        .unwrap()
+    });
+    static COUNT_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?s)size_of::<[A-Za-z0-9_:]+>\s*\(\s*\)\s*as\s+size_t\s*\)\s*\.\s*wrapping_mul\s*\(\s*(\d+)[a-z0-9]*\s+as\s+size_t\s*\)|\(\s*(\d+)[a-z0-9]*\s+as\s+size_t\s*\)\s*\.\s*wrapping_mul\s*\(\s*size_of::<[A-Za-z0-9_:]+>",
+        )
+        .unwrap()
+    });
+
+    let mut updated = code.to_string();
+    let mut changed = false;
+
+    loop {
+        let mut applied_this_round = false;
+        for captures in MALLOC_DECL_REGEX.captures_iter(&updated.clone()) {
+            let whole = captures.get(0).unwrap();
+            let indent = captures[1].to_string();
+            let name = captures[2].to_string();
+            let element_type = captures[3].to_string();
+            let initializer = captures[4].to_string();
+            let escaped = regex::escape(&name);
+
+            if !initializer.contains("malloc") && !initializer.contains("calloc") {
+                continue;
+            }
+            // `malloc(sizeof(int))` allocates exactly one element.
+            let count = COUNT_REGEX
+                .captures(&initializer)
+                .and_then(|c| c.get(1).or_else(|| c.get(2)))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_else(|| "1".to_string());
+
+            let offset_regex = Regex::new(&format!(
+                r"\*\s*{escaped}\s*\.\s*offset\s*\(\s*(.+?)\s+as\s+isize\s*\)"
+            ))
+            .unwrap();
+            let deref_assign_regex =
+                Regex::new(&format!(r"\*\s*{escaped}\s*=")).unwrap();
+            let deref_read_regex = Regex::new(&format!(r"\*\s*{escaped}\b")).unwrap();
+            let null_check_regex =
+                Regex::new(&format!(r"!\s*{escaped}\s*\.\s*is_null\s*\(\s*\)")).unwrap();
+            let is_null_regex =
+                Regex::new(&format!(r"{escaped}\s*\.\s*is_null\s*\(\s*\)")).unwrap();
+            let free_regex = Regex::new(&format!(
+                r"(?m)^[ \t]*free\s*\(\s*{escaped}\s*(?:as\s*\*mut\s*(?:[A-Za-z0-9_:]+))?\s*\)\s*;[ \t]*\n?"
+            ))
+            .unwrap();
+
+            let mut rewritten = sentence_replace(
+                &updated,
+                whole.as_str(),
+                &format!(
+                    "{indent}let mut {name}: Vec<{element_type}> = vec![Default::default(); {count}];"
+                ),
+            );
+            rewritten = offset_regex
+                .replace_all(&rewritten, format!("{name}[($1) as usize]").as_str())
+                .to_string();
+            rewritten = deref_assign_regex
+                .replace_all(&rewritten, format!("{name}[0] =").as_str())
+                .to_string();
+            rewritten = deref_read_regex
+                .replace_all(&rewritten, format!("{name}[0]").as_str())
+                .to_string();
+            // `free` and the null check are meaningless for an owned Vec.
+            rewritten = free_regex.replace_all(&rewritten, "").to_string();
+            rewritten = null_check_regex.replace_all(&rewritten, "true").to_string();
+            rewritten = is_null_regex.replace_all(&rewritten, "false").to_string();
+
+            // Every remaining mention must be the declaration or an index access.
+            let analysis = code_without_literals(&rewritten);
+            let total_mentions = Regex::new(&format!(r"\b{escaped}\b"))
+                .unwrap()
+                .find_iter(&analysis)
+                .count();
+            let indexed_mentions = Regex::new(&format!(r"\b{escaped}\s*\["))
+                .unwrap()
+                .find_iter(&analysis)
+                .count();
+            if total_mentions != indexed_mentions + 1 {
+                continue;
+            }
+
+            updated = rewritten;
+            changed = true;
+            applied_this_round = true;
+            break;
+        }
+        if !applied_this_round {
+            break;
+        }
+    }
+
+    (updated, changed)
+}
+
+/// Drops `unsafe` from functions whose body performs no unsafe operation, and
+/// from call sites that no longer need it. Verified by the caller, so a wrong
+/// guess is rolled back instead of silently changing behaviour.
+fn relax_unnecessary_unsafe_functions(code: &str) -> (String, bool) {
+    static DEF_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?x)
+            (?P<prefix>
+                unsafe\s+extern\s+"C"\s+fn
+                | unsafe\s+fn
+                | extern\s+"C"\s+fn
+            )
+            \s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(
+            "#,
+        )
+        .unwrap()
+    });
+
+    let mut updated = code.to_string();
+    let mut changed = false;
+
+    loop {
+        let snapshot = updated.clone();
+        let definitions: Vec<(String, bool)> = DEF_REGEX
+            .captures_iter(&snapshot)
+            .map(|captures| {
+                (
+                    captures.name("name").unwrap().as_str().to_string(),
+                    captures.name("prefix").unwrap().as_str().contains("unsafe"),
+                )
+            })
+            .collect();
+
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        for captures in DEF_REGEX.captures_iter(&snapshot) {
+            let whole = captures.get(0).unwrap();
+            let prefix = captures.name("prefix").unwrap();
+            let name = captures.name("name").unwrap().as_str().to_string();
+            let Some(brace) = snapshot[whole.end()..].find('{').map(|o| whole.end() + o) else {
+                continue;
+            };
+            let Some(close) = find_matching_delimiter(&snapshot, brace, '{', '}') else {
+                continue;
+            };
+            let body = &snapshot[brace..=close];
+
+            let calls_unsafe = definitions.iter().any(|(other, is_unsafe)| {
+                *is_unsafe
+                    && other != &name
+                    && Regex::new(&format!(r"\b{}\s*\(", regex::escape(other)))
+                        .map(|pattern| pattern.is_match(body))
+                        .unwrap_or(true)
+            });
+            let performs_unsafe = body.contains("&raw")
+                || body.contains("*mut")
+                || body.contains("*const")
+                || body.contains(".offset(")
+                || body.contains("transmute")
+                || body.contains("libc::")
+                || body.contains("from_raw")
+                || body.contains("get_unchecked")
+                || calls_unsafe;
+            if performs_unsafe {
+                continue;
+            }
+
+            if !prefix.as_str().contains("extern") {
+                edits.push((prefix.start(), prefix.end(), "fn".to_string()));
+                continue;
+            }
+
+            // A `extern "C"` definition can become a plain Rust fn unless its
+            // address is handed to C (a comparator, atexit hook, ...). Taking the
+            // address shows up as a bare identifier or `&name` outside its own
+            // definition and direct calls.
+            let escaped = regex::escape(&name);
+            // Count identifiers in code, not in literals/comments: a format string
+            // that mentions the function name is not a use of it.
+            let code_only = code_without_literals(&snapshot);
+            let address_taken = Regex::new(&format!(r"&\s*{escaped}\b"))
+                .map(|pattern| pattern.is_match(&code_only))
+                .unwrap_or(true);
+            let call_sites = Regex::new(&format!(r"\b{escaped}\s*\("))
+                .map(|pattern| pattern.find_iter(&code_only).count())
+                .unwrap_or(0);
+            let identifier_sites = Regex::new(&format!(r"\b{escaped}\b"))
+                .map(|pattern| pattern.find_iter(&code_only).count())
+                .unwrap_or(0);
+            let only_called = !address_taken && identifier_sites == call_sites;
+            // Plain Rust when only Rust calls it; otherwise keep the C ABI so the
+            // contract with C (function-pointer argument) still holds.
+            let new_prefix = if only_called {
+                "fn".to_string()
+            } else {
+                "extern \"C\" fn".to_string()
+            };
+            edits.push((prefix.start(), prefix.end(), new_prefix));
+        }
+
+        if edits.is_empty() {
+            break;
+        }
+        for (start, end, replacement) in edits.into_iter().rev() {
+            updated.replace_range(start..end, &replacement);
+            changed = true;
+        }
+        if updated == snapshot {
+            break;
+        }
+    }
+
+    (updated, changed)
 }
 
 /// Folds `sizeof([T; N]) / sizeof(T)` back into the array length and, when the
@@ -610,12 +1075,36 @@ fn normalize_c_abi_translation(code: &str) -> (String, bool) {
         updated = lowered;
     }
 
+    let (puts_lowered, puts_changed) = lower_puts_literals(&updated);
+    if puts_changed {
+        updated = puts_lowered;
+    }
+
+    let (stdio_lowered, stdio_changed) = lower_char_buffer_stdio(&updated);
+    if stdio_changed {
+        updated = stdio_lowered;
+    }
+
+    let (heap_lowered, heap_changed) = lower_malloc_arrays_to_vec(&updated);
+    if heap_changed {
+        updated = heap_lowered;
+    }
+
     let (bounds_simplified, bounds_changed) = simplify_c_array_length_bounds(&updated);
     if bounds_changed {
         updated = bounds_simplified;
     }
 
     updated = updated.replace("println!(\"\")", "println!()");
+
+    let (collapsed, collapsed_changed) = collapse_true_blocks(&updated);
+    if collapsed_changed {
+        updated = collapsed;
+    }
+    updated = Regex::new(r"=\s*\{\s*([A-Za-z_][A-Za-z0-9_]*\(\))\s*\};")
+        .unwrap()
+        .replace_all(&updated, "= $1;")
+        .to_string();
 
     // c2rust exports every translated function to C; a standalone program keeps the
     // C ABI on its definitions (callbacks such as `qsort` comparators need it) but not
@@ -630,6 +1119,11 @@ fn normalize_c_abi_translation(code: &str) -> (String, bool) {
             break;
         }
         updated = rewritten;
+    }
+
+    let (pruned_types, pruned_types_changed) = prune_unused_c_type_declarations(&updated);
+    if pruned_types_changed {
+        updated = pruned_types;
     }
 
     let (pruned, pruned_changed) = prune_unused_c_ffi_blocks(&updated);
@@ -724,17 +1218,32 @@ struct RustcDiagnosticSpan {
     suggested_replacement: Option<String>,
 }
 
-fn find_rustfmt_binary() -> Option<String> {
+static RUSTFMT_BINARY: Lazy<Option<String>> = Lazy::new(|| {
     let candidates = [
         "rustfmt",
         "/opt/homebrew/bin/rustfmt",
         "/usr/local/bin/rustfmt",
         "/usr/bin/rustfmt",
     ];
+    // Resolving from PATH with a file check avoids a slow `--version` spawn on
+    // every conversion; the probe is only the fallback.
     for candidate in candidates {
-        if candidate.contains('/') && !Path::new(candidate).is_file() {
+        if !candidate.contains('/') {
+            if let Ok(path) = std::env::var("PATH") {
+                for dir in path.split(':') {
+                    let full = Path::new(dir).join(candidate);
+                    if full.is_file() {
+                        return Some(full.to_string_lossy().to_string());
+                    }
+                }
+            }
             continue;
         }
+        if Path::new(candidate).is_file() {
+            return Some(candidate.to_string());
+        }
+    }
+    for candidate in ["rustfmt", "/opt/homebrew/bin/rustfmt", "/usr/local/bin/rustfmt"] {
         if Command::new(candidate)
             .arg("--version")
             .stdout(Stdio::null())
@@ -747,6 +1256,10 @@ fn find_rustfmt_binary() -> Option<String> {
         }
     }
     None
+});
+
+fn find_rustfmt_binary() -> Option<String> {
+    RUSTFMT_BINARY.clone()
 }
 
 fn find_rustc_binary() -> Option<String> {
@@ -1150,6 +1663,7 @@ fn unwrap_trivial_unsafe_blocks(code: &str) -> (String, usize) {
     static UNSAFE_FN_REGEX: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r#"\bunsafe\s+(?:extern\s+"C"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"#).unwrap()
     });
+    static UNSAFE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bunsafe\b").unwrap());
 
     let mut updated = code.replace("pub unsafe fn main(", "fn main(");
     updated = updated.replace("unsafe fn main(", "fn main(");
@@ -1167,35 +1681,51 @@ fn unwrap_trivial_unsafe_blocks(code: &str) -> (String, usize) {
         })
     };
 
-    let unsafe_block_regex = Regex::new(r"\bunsafe\s*\{([^{}]*)\}").unwrap();
     loop {
-        let mut removed_in_pass = 0usize;
-        let next = unsafe_block_regex
-            .replace_all(&updated, |captures: &regex::Captures| {
-                let inner = captures.get(1).unwrap().as_str();
-                let trimmed_inner = inner.trim();
-                let has_unsafe_op = trimmed_inner.contains('*')
-                    || trimmed_inner.contains("transmute")
-                    || trimmed_inner.contains("libc::")
-                    || trimmed_inner.contains("from_raw")
-                    || trimmed_inner.contains("as_ptr")
-                    || trimmed_inner.contains("as_mut_ptr")
-                    || trimmed_inner.contains("get_unchecked")
-                    || trimmed_inner.contains("extern")
-                    || trimmed_inner.contains("&raw")
-                    || trimmed_inner.contains(".offset(")
-                    || calls_unsafe_function(trimmed_inner);
-                if has_unsafe_op {
-                    captures.get(0).unwrap().as_str().to_string()
-                } else {
-                    removed_in_pass += 1;
-                    format!("{{ {} }}", trimmed_inner)
-                }
-            })
-            .to_string();
-        updated = next;
-        count += removed_in_pass;
-        if removed_in_pass == 0 {
+        let snapshot = updated.clone();
+        let mut edits: Vec<(usize, usize)> = Vec::new();
+        for token in UNSAFE_TOKEN_REGEX.find_iter(&snapshot) {
+            let after = snapshot[token.end()..].trim_start();
+            if !after.starts_with('{') {
+                continue;
+            }
+            let brace = snapshot.len() - after.len();
+            let Some(close) = find_matching_delimiter(&snapshot, brace, '{', '}') else {
+                continue;
+            };
+            let inner = &snapshot[brace + 1..close];
+            // Braces inside format strings must not be treated as block nesting,
+            // so the block extent comes from the delimiter matcher.
+            let has_unsafe_op = inner.contains('*')
+                || inner.contains("transmute")
+                || inner.contains("libc::")
+                || inner.contains("from_raw")
+                || inner.contains("as_ptr")
+                || inner.contains("as_mut_ptr")
+                || inner.contains("get_unchecked")
+                || inner.contains("extern")
+                || inner.contains("&raw")
+                || inner.contains(".offset(")
+                || calls_unsafe_function(inner);
+            if !has_unsafe_op {
+                edits.push((token.start(), close + 1));
+            }
+        }
+
+        if edits.is_empty() {
+            break;
+        }
+        for (start, end) in edits.into_iter().rev() {
+            let inner = snapshot[start..end]
+                .trim_start_matches("unsafe")
+                .trim_start()
+                .trim_start_matches('{')
+                .trim_end_matches('}')
+                .to_string();
+            updated.replace_range(start..end, &inner);
+            count += 1;
+        }
+        if updated == snapshot {
             break;
         }
     }
@@ -1876,6 +2406,22 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
             .push("normalize_c_abi_translation".to_string());
     }
 
+    let (relaxed, relaxed_changed) = relax_unnecessary_unsafe_functions(&candidate);
+    if relaxed_changed {
+        let (verified, accepted) = verify_or_rollback_transformation(
+            &candidate,
+            &relaxed,
+            "relax_unnecessary_unsafe_functions",
+            &mut summary.rejected_passes,
+        );
+        if accepted {
+            candidate = verified;
+            summary
+                .applied_passes
+                .push("relax_unnecessary_unsafe_functions".to_string());
+        }
+    }
+
     let (external_out, external_passes) = try_external_c2rust_tools(&candidate);
     if !external_passes.is_empty() {
         candidate = external_out;
@@ -1932,6 +2478,12 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 .push("remove_unnecessary_mut".to_string());
         }
     }
+
+    // `unsafe { f() }` becomes `{ f() }` once `f` was relaxed to a safe fn.
+    candidate = Regex::new(r"=\s*\{\s*([A-Za-z_][A-Za-z0-9_:]*\([^;{}]*\))\s*\};")
+        .unwrap()
+        .replace_all(&candidate, "= $1;")
+        .to_string();
 
     if let Some(formatted) = format_with_rustfmt(&candidate) {
         candidate = formatted;
@@ -2174,6 +2726,101 @@ pub fn main() {
     }
 
     #[test]
+    fn lowers_puts_literal_and_fixed_char_buffer_io_to_safe_rust() {
+        let faithful = r#"extern "C" {
+    fn puts(_: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
+    fn gets(_: *mut ::core::ffi::c_char) -> *mut ::core::ffi::c_char;
+}
+unsafe fn main_0() -> ::core::ffi::c_int {
+    let mut data: [::core::ffi::c_char; 10] = [0; 10];
+    puts(b"Enter Data:\n\0" as *const u8 as *const ::core::ffi::c_char);
+    gets(&raw mut data as *mut ::core::ffi::c_char);
+    puts(&raw mut data as *mut ::core::ffi::c_char);
+    return 0 as ::core::ffi::c_int;
+}
+pub fn main() {
+    unsafe { ::std::process::exit(main_0() as i32) }
+}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(!idiomatic.contains("unsafe"));
+        assert!(!idiomatic.contains("extern \"C\""));
+        assert!(!idiomatic.contains("gets"));
+        assert!(!idiomatic.contains("puts"));
+        assert!(idiomatic.contains("let mut data: [u8; 10] = [0u8; 10];"));
+        assert!(idiomatic.contains(".take(data.len() as u64)"));
+        assert!(idiomatic.contains("String::from_utf8_lossy(&data[..__read_data])"));
+        assert!(idiomatic.contains("println!(\"Enter Data:\")"));
+        assert!(idiomatic.contains("fn main_0() -> i32"));
+    }
+
+    #[test]
+    fn lowers_malloc_free_array_into_owned_vec() {
+        let faithful = r#"extern "C" {
+    fn malloc(__size: size_t) -> *mut ::core::ffi::c_void;
+    fn free(_: *mut ::core::ffi::c_void);
+}
+pub type size_t = usize;
+unsafe fn main_0() -> ::core::ffi::c_int {
+    let mut arr: *mut ::core::ffi::c_int = malloc(
+        (::core::mem::size_of::<::core::ffi::c_int>() as size_t).wrapping_mul(4 as size_t),
+    ) as *mut ::core::ffi::c_int;
+    let mut i: ::core::ffi::c_int = 0 as ::core::ffi::c_int;
+    while i < 4 as ::core::ffi::c_int {
+        *arr.offset(i as isize) = i + 10 as ::core::ffi::c_int;
+        i += 1;
+    }
+    let mut j: ::core::ffi::c_int = 0 as ::core::ffi::c_int;
+    while j < 4 as ::core::ffi::c_int {
+        printf(b"%d\0" as *const u8 as *const ::core::ffi::c_char, *arr.offset(j as isize));
+        j += 1;
+    }
+    free(arr as *mut ::core::ffi::c_void);
+    return 0 as ::core::ffi::c_int;
+}
+pub fn main() {
+    unsafe { ::std::process::exit(main_0() as i32) }
+}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(!idiomatic.contains("unsafe"));
+        assert!(!idiomatic.contains("extern \"C\""));
+        assert!(!idiomatic.contains("malloc"));
+        assert!(!idiomatic.contains("free("));
+        assert!(idiomatic.contains("let mut arr: Vec<i32> = vec![Default::default(); 4];"));
+        assert!(idiomatic.contains("arr[i as usize] = i + 10i32;"));
+    }
+
+    #[test]
+    fn refuses_idiomatic_output_that_still_needs_unsafe_or_c_interop() {
+        // `qsort` needs an extern "C" comparator, so no safe Rust projection exists.
+        let faithful = r#"extern "C" {
+    fn qsort(__base: *mut ::core::ffi::c_void, __nmemb: usize, __size: usize, __compar: unsafe extern "C" fn(_: *const ::core::ffi::c_void, _: *const ::core::ffi::c_void) -> ::core::ffi::c_int);
+}
+unsafe extern "C" fn cmp(a: *const ::core::ffi::c_void, b: *const ::core::ffi::c_void) -> ::core::ffi::c_int {
+    (*(a as *const ::core::ffi::c_int)).cmp(&*(b as *const ::core::ffi::c_int)) as ::core::ffi::c_int
+}
+unsafe fn main_0() -> ::core::ffi::c_int {
+    let mut values: [::core::ffi::c_int; 3] = [3, 1, 2];
+    qsort(&raw mut values as *mut ::core::ffi::c_void, 3, 4, cmp);
+    return 0;
+}
+pub fn main() {
+    unsafe { ::std::process::exit(main_0() as i32) }
+}"#;
+
+        let (_, summary) = postprocess_rust_code(faithful);
+        assert!(!summary.compiler_verified);
+        assert!(summary
+            .verification_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("raw engine transcription"));
+    }
+
+    #[test]
     fn normalizes_c_abi_types_entrypoint_and_printf_for_any_c_translation() {
         let faithful = r#"extern "C" {
     fn printf(_: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
@@ -2202,13 +2849,13 @@ pub fn main() {
         assert!(!idiomatic.contains("::core::ffi"));
         assert!(!idiomatic.contains("printf"));
         assert!(idiomatic.contains("println!(\"value={}\""));
-        assert!(idiomatic.contains("unsafe fn main_0() -> i32"));
+        assert!(idiomatic.contains("fn main_0() -> i32"));
         assert!(idiomatic.contains("fn main()"));
-        assert!(idiomatic.contains("let exit_code = unsafe { main_0() };"));
+        assert!(idiomatic.contains("let exit_code = main_0();"));
     }
 
     #[test]
-    fn keeps_unlowerable_printf_and_its_declaration_intact() {
+    fn keeps_unlowerable_printf_in_faithful_and_refuses_it_as_idiomatic() {
         let faithful = r#"extern "C" {
     fn printf(_: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
 }
@@ -2220,11 +2867,17 @@ pub fn main() {
     unsafe { ::std::process::exit(main_0() as i32) }
 }"#;
 
+        // `%s` needs a C string operand, so no safe Rust projection exists and the
+        // raw transcription stays in Faithful only.
         let (idiomatic, summary) = postprocess_rust_code(faithful);
-        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(!summary.compiler_verified);
+        assert!(summary
+            .verification_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("raw engine transcription"));
         assert!(idiomatic.contains("printf("));
-        assert!(idiomatic.contains("fn printf("));
-        assert!(!idiomatic.contains("print!(\"%s\""));
+        assert!(!idiomatic.contains("println!(\"%s\""));
     }
 
     #[test]
@@ -2258,4 +2911,6 @@ fn main() {
         assert!(c_printf_format_to_rust(r"%5d\0").is_none());
     }
 }
+
+
 

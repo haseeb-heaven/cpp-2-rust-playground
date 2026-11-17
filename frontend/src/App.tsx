@@ -12,6 +12,7 @@ import {
 } from "./services/apiClient";
 import { mergeIncrementalRustEdits } from "./utils/incrementalMerge";
 import { buildLineByLineConversionInput } from "./utils/lineByLineFilter";
+import { detectSourceLanguage } from "./utils/languageDetection";
 import { formatRustCode } from "./utils/rustFormatter";
 import {
   downloadTextFile,
@@ -133,6 +134,8 @@ export const App: React.FC = () => {
   const conversionAbortRef = useRef<AbortController | null>(null);
   const outputStyleRef = useRef<RustOutputStyle>(outputStyle);
   outputStyleRef.current = outputStyle;
+  const sourceLanguageRef = useRef<SourceLanguage>(sourceLanguage);
+  sourceLanguageRef.current = sourceLanguage;
 
   useEffect(() => {
     fetchPremadeExamples()
@@ -461,7 +464,7 @@ export const App: React.FC = () => {
         setSourceCode(content);
         setIsRustManuallyEdited(false);
       } else {
-        setSourceLanguage("cpp");
+        setSourceLanguage(detectSourceLanguage(content, "cpp"));
         setSourceCode(content);
         setIsRustManuallyEdited(false);
       }
@@ -509,12 +512,22 @@ export const App: React.FC = () => {
     .filter((diag) => diag.severity === "error")
     .map((diag) => diag.lineNumber);
 
+  const handleSourceCodeChange = useCallback((nextCode: string) => {
+    setSourceCode(nextCode);
+    // Keep the conversion engine honest: C code must reach c2rust and C++ code
+    // must reach cpp2rust, no matter which language the editor started in.
+    const detected = detectSourceLanguage(nextCode, sourceLanguageRef.current);
+    if (detected !== sourceLanguageRef.current) {
+      setSourceLanguage(detected);
+    }
+  }, []);
+
   const sourceEditorPane = (
     <EditorPane
       title={sourceLanguage === "c" ? "C Source" : "C++ Source"}
       language="cpp"
       value={sourceCode}
-      onChange={setSourceCode}
+      onChange={handleSourceCodeChange}
       theme={theme}
       highlightedLines={highlightedSourceLines}
       errorLines={sourceErrorLines}

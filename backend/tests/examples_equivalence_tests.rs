@@ -88,6 +88,14 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
             "Example '{}' was not compiler_verified in post-processing",
             example.identifier
         );
+        assert!(
+            !conversion.idiomatic_rust_code.contains("unsafe")
+                && !conversion.idiomatic_rust_code.contains("extern \"C\"")
+                && !conversion.idiomatic_rust_code.contains("::core::ffi"),
+            "Example '{}' Idiomatic Rust must be plain safe Rust (no unsafe/extern C):\n{}",
+            example.identifier,
+            conversion.idiomatic_rust_code
+        );
 
         if cfg!(target_arch = "x86_64")
             && (example.identifier == "c-float-limits-sizeof"
