@@ -628,9 +628,25 @@ pub fn verify_or_rollback_transformation(
 
 pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSummary) {
     let mut summary = PostProcessingSummary::default();
+    if faithful_rust.contains("// [Unsupported C/C++ syntax in regex fallback]:") {
+        let reason =
+            "Source contains unsupported C/C++ constructs that the regex fallback cannot translate."
+                .to_string();
+        summary.compiler_verified = false;
+        summary.verification_error = Some(reason.clone());
+        summary
+            .rejected_passes
+            .push(format!("idiomatic_cleanup ({})", reason));
+        return (faithful_rust.to_string(), summary);
+    }
+
     if faithful_rust.contains("// [Preprocessor] #")
         || faithful_rust.matches('{').count() != faithful_rust.matches('}').count()
     {
+        summary.compiler_verified = false;
+        summary.verification_error = Some(
+            "Source has syntax or preprocessor errors; preserved raw output.".to_string(),
+        );
         summary.rejected_passes.push(
             "idiomatic_cleanup (source has syntax/preprocessor errors; preserved Faithful Rust)"
                 .to_string(),
@@ -709,13 +725,22 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
             summary.compiler_verified = true;
             (candidate, summary)
         }
-        Err(_) => {
-            summary.rejected_passes.push(
-                "idiomatic_cleanup (failed rustc verification; reverted to Faithful Rust)"
-                    .to_string(),
-            );
+        Err(candidate_err) => {
+            summary.rejected_passes.push(format!(
+                "idiomatic_cleanup (failed rustc verification: {}; reverted to Faithful Rust)",
+                candidate_err
+            ));
             summary.formatted_with_rustfmt = false;
-            summary.compiler_verified = check_rustc_and_collect_diagnostics(faithful_rust).is_ok();
+            match check_rustc_and_collect_diagnostics(faithful_rust) {
+                Ok(_) => {
+                    summary.compiler_verified = true;
+                    summary.verification_error = None;
+                }
+                Err(faithful_err) => {
+                    summary.compiler_verified = false;
+                    summary.verification_error = Some(faithful_err);
+                }
+            }
             (faithful_rust.to_string(), summary)
         }
     }

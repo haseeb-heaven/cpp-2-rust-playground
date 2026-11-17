@@ -95,17 +95,20 @@ export const App: React.FC = () => {
   const [lineMappings, setLineMappings] = useState<LineMapping[]>([]);
   const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnostic[]>([]);
   const [conversionExplanations, setConversionExplanations] = useState<ConversionExplanation[]>([]);
+  const [usedFallback, setUsedFallback] = useState<boolean>(true);
+  const [compilerVerified, setCompilerVerified] = useState<boolean>(true);
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const [transpilerEngine, setTranspilerEngine] = useState<string>(
     sourceLanguage === "c"
-      ? "c2rust (immunant/c2rust C99/C11 engine)"
-      : "cpp2rust (Cpp2Rust/cpp2rust Safe C++ engine)"
+      ? "Built-in Regex C Fallback (c2rust CLI not checked yet)"
+      : "Built-in Regex C++ Fallback (cpp2rust CLI not checked yet)"
   );
 
   useEffect(() => {
     setTranspilerEngine(
       sourceLanguage === "c"
-        ? "c2rust (immunant/c2rust C99/C11 engine)"
-        : "cpp2rust (Cpp2Rust/cpp2rust Safe C++ engine)"
+        ? "Built-in Regex C Fallback (c2rust CLI not checked yet)"
+        : "Built-in Regex C++ Fallback (cpp2rust CLI not checked yet)"
     );
   }, [sourceLanguage]);
   const [highlightedSourceLines, setHighlightedSourceLines] = useState<number[]>([]);
@@ -168,6 +171,9 @@ export const App: React.FC = () => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
           setConversionExplanations(conversionResult.explanations ?? []);
+          setUsedFallback(conversionResult.usedFallback ?? true);
+          setCompilerVerified(conversionResult.postProcessing?.compilerVerified ?? false);
+          setFallbackReason(conversionResult.fallbackReason ?? null);
           if (conversionResult.transpilerEngine) {
             setTranspilerEngine(conversionResult.transpilerEngine);
           }
@@ -536,9 +542,17 @@ export const App: React.FC = () => {
       highlightedLines={highlightedRustLines}
       onCursorLineChange={handleRustCursorLine}
       secondaryBadgeText={
-        sourceLanguage === "c" ? "Engine: c2rust" : "Engine: cpp2rust"
+        !usedFallback
+          ? sourceLanguage === "c"
+            ? "Engine: c2rust CLI"
+            : "Engine: cpp2rust CLI"
+          : compilerVerified
+            ? "Engine: Regex Fallback (rustc-checked)"
+            : "Engine: Regex Fallback (Unverified)"
       }
-      secondaryBadgeTitle={transpilerEngine}
+      secondaryBadgeTitle={
+        fallbackReason ? `${transpilerEngine} — ${fallbackReason}` : transpilerEngine
+      }
       secondaryBadgeTestId="transpiler-engine-badge"
       badgeText={isRustManuallyEdited ? "Manual Edits Preserved" : "Auto-Synced"}
       testId="rust-editor-pane"

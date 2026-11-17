@@ -20,6 +20,17 @@ static COMPILER_LINE_REGEX: Lazy<Regex> =
 static RUSTC_ARROW_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?m)(error(?:\[E\d+\])?|warning):\s*(.+)\n\s*-->\s*[^:\n]+:(\d+):(\d+)").unwrap());
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
+fn truncate_output(bytes: &[u8]) -> String {
+    if bytes.len() <= MAX_OUTPUT_BYTES {
+        String::from_utf8_lossy(bytes).to_string()
+    } else {
+        let mut truncated = String::from_utf8_lossy(&bytes[..MAX_OUTPUT_BYTES]).to_string();
+        truncated.push_str("\n... [output truncated at 64 KB limit]");
+        truncated
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -339,6 +350,11 @@ async fn execute_locally(
     }
 
     let mut compile_command = Command::new(compiler_name);
+    compile_command
+        .kill_on_drop(true)
+        .current_dir(&temp_guard.directory_path)
+        .env_remove("JDOODLE_CLIENT_ID")
+        .env_remove("JDOODLE_CLIENT_SECRET");
     match request.language {
         ExecutionLanguage::C => {
             compile_command.arg(&source_path).arg("-o").arg(&binary_path);
@@ -428,8 +444,27 @@ async fn execute_locally(
         };
     }
 
+    #[cfg(unix)]
+    let mut run_command = {
+        let mut cmd = Command::new("sh");
+        let ulimit_cmd = format!(
+            "ulimit -t {} -f 16384 -c 0 -n 64 2>/dev/null; exec \"$1\"",
+            configuration.request_timeout_seconds.max(1)
+        );
+        cmd.arg("-c")
+            .arg(ulimit_cmd)
+            .arg("--")
+            .arg(&binary_path);
+        cmd
+    };
+    #[cfg(not(unix))]
     let mut run_command = Command::new(&binary_path);
+
     run_command
+        .kill_on_drop(true)
+        .current_dir(&temp_guard.directory_path)
+        .env_remove("JDOODLE_CLIENT_ID")
+        .env_remove("JDOODLE_CLIENT_SECRET")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -458,8 +493,8 @@ async fn execute_locally(
 
     match tokio::time::timeout(timeout_duration, child.wait_with_output()).await {
         Ok(Ok(run_output)) => {
-            let stdout_text = String::from_utf8_lossy(&run_output.stdout).to_string();
-            let stderr_text = String::from_utf8_lossy(&run_output.stderr).to_string();
+            let stdout_text = truncate_output(&run_output.stdout);
+            let stderr_text = truncate_output(&run_output.stderr);
             let exit_code = run_output.status.code().unwrap_or(-1);
             let succeeded = run_output.status.success();
 
@@ -792,5 +827,16 @@ mod tests {
             assert!(cpp_response.used_provider.starts_with("local ("));
             assert_eq!(cpp_response.output.trim(), "cpp-local-ok");
         }
+    }
+
+    #[test]
+    fn truncates_large_output_at_limit() {
+        let small = b"hello world";
+        assert_eq!(truncate_output(small), "hello world");
+
+        let oversized = vec![b'A'; MAX_OUTPUT_BYTES + 512];
+        let truncated = truncate_output(&oversized);
+        assert!(truncated.contains("[output truncated at 64 KB limit]"));
+        assert!(truncated.len() < oversized.len());
     }
 }

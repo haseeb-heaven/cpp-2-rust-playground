@@ -20,6 +20,153 @@ static FOR_LOOP_VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
 static FUNCTION_PARAMS_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^[A-Za-z_][A-Za-z0-9_:<>,\s*&]*?\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^)]*)\)\s*(?:const\s*)?\{\s*$").unwrap()
 });
+static UNSUPPORTED_EXCEPTIONS_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:\btry\s*\{|\bcatch\s*\(|\bthrow\b)").unwrap()
+});
+static UNSUPPORTED_INHERITANCE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:\bclass\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?:public|protected|private)\s+[A-Za-z_]|\bvirtual\s+|\boverride\b)").unwrap()
+});
+static UNSUPPORTED_OPERATOR_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\boperator\s*(?:\+\+|--|<<|>>|==|!=|<=|>=|\+=|-=|\*=|/=|\[\]|\(\)|[+\-*/%<>&|^!~=])").unwrap()
+});
+static UNSUPPORTED_TEMPLATE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:\b(?:typename|class)\s*\.\.\.|\btemplate\s*<\s*>)").unwrap()
+});
+static UNSUPPORTED_CAST_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\b(?:dynamic_cast|reinterpret_cast|const_cast)\s*<").unwrap()
+});
+static UNSUPPORTED_NAMESPACE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*namespace\s+[A-Za-z_][A-Za-z0-9_:]*\s*\{?\s*$").unwrap()
+});
+static UNSUPPORTED_DELETE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\s*delete(?:\s*\[\s*\])?\s+[A-Za-z_*(&]").unwrap()
+});
+static UNSUPPORTED_ASM_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:\b__asm__\b|\basm\s*\()").unwrap()
+});
+
+fn strip_string_literals_for_scan(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut in_quotes = false;
+    let mut prev_escape = false;
+    for ch in line.chars() {
+        if in_quotes {
+            if ch == '"' && !prev_escape {
+                in_quotes = false;
+            }
+            prev_escape = ch == '\\' && !prev_escape;
+            output.push(' ');
+            continue;
+        }
+        if ch == '"' {
+            in_quotes = true;
+            output.push(' ');
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+pub fn classify_unsupported_construct(
+    trimmed_line: &str,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    if trimmed_line.is_empty()
+        || trimmed_line.starts_with("//")
+        || trimmed_line.starts_with("/*")
+        || trimmed_line.starts_with('#')
+    {
+        return None;
+    }
+
+    let code_only = strip_string_literals_for_scan(trimmed_line);
+    let sanitized = code_only.trim();
+
+    if UNSUPPORTED_EXCEPTIONS_REGEX.is_match(sanitized) {
+        return Some((
+            "C++ exceptions (try/catch/throw)",
+            "C++ exceptions ('try'/'catch'/'throw') are not supported by the fallback translator; Rust uses Result<T, E>.",
+            "Replace exceptions with Result<T, E> return types and '?' propagation in Rust.",
+        ));
+    }
+    if UNSUPPORTED_INHERITANCE_REGEX.is_match(sanitized) {
+        return Some((
+            "C++ inheritance / virtual dispatch",
+            "C++ inheritance and virtual methods are not supported by the fallback translator; Rust uses traits and composition.",
+            "Model shared interfaces with Rust 'trait' definitions and struct composition.",
+        ));
+    }
+    if UNSUPPORTED_OPERATOR_REGEX.is_match(sanitized) {
+        return Some((
+            "C++ operator overloading",
+            "C++ operator overloading is not supported by the fallback translator; Rust uses std::ops traits.",
+            "Implement Rust traits such as std::ops::Add, PartialEq, or Display instead of operator overloads.",
+        ));
+    }
+    if UNSUPPORTED_TEMPLATE_REGEX.is_match(sanitized) {
+        return Some((
+            "Variadic templates / template specialization",
+            "C++ variadic templates and template specializations are not supported by the fallback translator.",
+            "Install Cpp2Rust CLI for full Clang AST template support, or rewrite using slices/tuples/macros.",
+        ));
+    }
+    if UNSUPPORTED_CAST_REGEX.is_match(sanitized) {
+        return Some((
+            "C++ RTTI / low-level casts",
+            "C++ RTTI and low-level casts ('dynamic_cast'/'reinterpret_cast'/'const_cast') are not supported by the fallback translator.",
+            "Use Rust enums/traits for safe dispatch, or explicit unsafe casts where required.",
+        ));
+    }
+    if UNSUPPORTED_NAMESPACE_REGEX.is_match(sanitized) {
+        return Some((
+            "C++ namespace block",
+            "C++ namespace blocks are not supported by the fallback translator; Rust uses 'mod' blocks.",
+            "Replace 'namespace name { ... }' with Rust 'mod name { ... }'.",
+        ));
+    }
+    if UNSUPPORTED_DELETE_REGEX.is_match(sanitized) {
+        return Some((
+            "Manual delete / delete[]",
+            "Manual 'delete'/'delete[]' is not supported in safe Rust; memory is freed via Drop.",
+            "Remove manual 'delete' calls and rely on Box<T> / Vec<T> RAII ownership in Rust.",
+        ));
+    }
+    if UNSUPPORTED_ASM_REGEX.is_match(sanitized) {
+        return Some((
+            "Inline assembly",
+            "Inline assembly is not supported by the fallback translator.",
+            "Use Rust's std::arch::asm! macro for target-specific assembly.",
+        ));
+    }
+
+    None
+}
+
+pub fn detect_unsupported_constructs(
+    source_lines: &[&str],
+) -> (Vec<ConversionDiagnostic>, Vec<String>) {
+    let mut diagnostics = Vec::new();
+    let mut construct_names = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (idx, raw_line) in source_lines.iter().enumerate() {
+        let trimmed = raw_line.trim();
+        if let Some((construct_name, message, fix)) = classify_unsupported_construct(trimmed) {
+            if seen.insert(construct_name.to_string()) {
+                construct_names.push(construct_name.to_string());
+            }
+            diagnostics.push(ConversionDiagnostic {
+                line_number: idx + 1,
+                severity: DiagnosticSeverity::Error,
+                category: ErrorCategory::Conversion,
+                message: message.to_string(),
+                suggested_fix: Some(fix.to_string()),
+            });
+        }
+    }
+
+    (diagnostics, construct_names)
+}
 
 const VALID_PREPROCESSOR_DIRECTIVES: &[&str] = &[
     "include", "define", "undef", "if", "ifdef", "ifndef", "else", "elif", "endif", "pragma",
@@ -62,6 +209,13 @@ fn find_closest_match<'a>(target: &str, candidates: &'a HashSet<String>) -> Opti
 }
 
 pub fn analyze_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagnostic> {
+    let mut diagnostics = analyze_base_source_diagnostics(source_lines);
+    let (unsupported_diagnostics, _) = detect_unsupported_constructs(source_lines);
+    diagnostics.extend(unsupported_diagnostics);
+    diagnostics
+}
+
+pub fn analyze_base_source_diagnostics(source_lines: &[&str]) -> Vec<ConversionDiagnostic> {
     let mut diagnostics = Vec::new();
     let mut brace_stack: Vec<usize> = Vec::new();
     let mut declared_identifiers: HashSet<String> = HashSet::new();

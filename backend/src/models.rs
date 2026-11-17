@@ -85,6 +85,7 @@ pub struct PostProcessingSummary {
     pub rejected_passes: Vec<String>,
     pub formatted_with_rustfmt: bool,
     pub compiler_verified: bool,
+    pub verification_error: Option<String>,
     pub unsafe_blocks_removed: usize,
     pub redundant_mut_removed: usize,
     pub redundant_casts_removed: usize,
@@ -121,6 +122,9 @@ pub struct ConversionResponse {
     pub required_imports: Vec<String>,
     pub conversion_time_milliseconds: u128,
     pub transpiler_engine: String,
+    pub used_fallback: bool,
+    pub fallback_reason: Option<String>,
+    pub unsupported_constructs: Vec<String>,
     pub post_processing: PostProcessingSummary,
     pub explanations: Vec<ConversionExplanation>,
 }

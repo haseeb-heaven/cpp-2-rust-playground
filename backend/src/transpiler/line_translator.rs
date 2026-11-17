@@ -1558,6 +1558,10 @@ pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> Str
     }
 }
 
+fn is_unsupported_fallback_construct(trimmed: &str) -> bool {
+    super::diagnostics::classify_unsupported_construct(trimmed).is_some()
+}
+
 fn translate_single_line_core(
     leading_whitespace: &str,
     trimmed: &str,
@@ -1565,6 +1569,13 @@ fn translate_single_line_core(
     state: &mut TranslatorState,
 ) -> String {
     let _ = raw_line;
+
+    if is_unsupported_fallback_construct(trimmed) {
+        return format!(
+            "{}// [Unsupported C/C++ syntax in regex fallback]: {}",
+            leading_whitespace, trimmed
+        );
+    }
 
     if let Some(captures) = INCLUDE_REGEX.captures(trimmed) {
         let header = captures.get(1).map(|m| m.as_str()).unwrap_or("");

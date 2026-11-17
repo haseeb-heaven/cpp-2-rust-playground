@@ -10,14 +10,24 @@ Repository: https://github.com/haseeb-heaven/cpp-2-rust-playground
 
 An interactive web IDE and compiler wrapper built with **Rust (Axum)** and **React + TypeScript + Vite** for translating **C** and **C++** code to Rust, inspecting diagnostics and line mappings, and compiling/running both source and generated Rust locally or online.
 
-## Backbone Transpiler Engines
+## Backbone Transpiler Engines & Fallback Transparency
 
-`cpp-2-rust-playground` acts as a web wrapper around two language-specific backbone transpilers:
+`cpp-2-rust-playground` uses external AST-based C/C++ → Rust transpilers as its primary engines and falls back honestly to a built-in heuristic regex translator when the external binaries are not installed or fail:
 
-| Source Language | Backbone Engine | CLI Dispatch | Fallback Engine |
+| Source Language | Primary Engine (External CLI) | Fallback Engine (Built-in Heuristic) | Verification & Honest Labeling |
 |---|---|---|---|
-| **C (C99 / C11)** | [`immunant/c2rust`](https://github.com/immunant/c2rust) | Invokes `c2rust transpile compile_commands.json --output-dir <tmp>` when `C2RUST_BIN` or `c2rust` is installed | Built-in C2Rust-aligned C99/C11 -> Safe Rust transpiler |
-| **C++ (C++17 / STL)** | [`Cpp2Rust/cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) | Invokes `cpp2rust --file=<input.cpp> -o=<output.rs>` when `CPP2RUST_BIN` or `cpp2rust` is installed | Built-in Cpp2Rust-aligned C++ -> Safe Rust transpiler |
+| **C (C99 / C11)** | [`immunant/c2rust`](https://github.com/immunant/c2rust) via `c2rust transpile compile_commands.json --output-dir <tmp>` | Built-in Regex C Fallback (`line_translator.rs`) | API returns `usedFallback`, `fallbackReason`, `unsupportedConstructs`, and an explicit `Built-in Regex C Fallback` engine badge when `c2rust` CLI did not execute |
+| **C++ (C++17 / STL)** | [`Cpp2Rust/cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) via `cpp2rust --file=<input.cpp> -o=<output.rs>` | Built-in Regex C++ Fallback (`line_translator.rs`) | Flags unsupported syntax (`try`/`catch`/`throw`, inheritance/`virtual`, operator overloads, variadic templates, `dynamic_cast`/`reinterpret_cast`, namespaces, `delete`, inline `asm`) and never claims unverified fallback code is equivalent |
+
+### Output Modes
+
+- **Faithful Rust (Raw Output)**: Preserves the uncleaned translator output 1:1.
+- **Idiomatic Rust (Learning Mode)**: Optional educational view that strips boilerplate, removes redundant `mut` / casts / trivial `unsafe` blocks, formats with `rustfmt`, checks compilation via `rustc --emit=metadata`, and explains construct ownership & iteration differences (`std::vector<int>` → `Vec<i32>`, `&T` / `&mut T`, etc.). Any transform failing `rustc` verification rolls back automatically.
+
+### Execution Isolation & Resource Limits
+
+- Local compilation/execution runs in per-request temporary directories with `kill_on_drop(true)` process timeouts, scrubbed API credentials (`JDOODLE_CLIENT_ID`/`JDOODLE_CLIENT_SECRET`), Unix `ulimit` resource caps (CPU time, file size, core dumps, open file descriptors), and 64 KB stdout/stderr output truncation.
+- For untrusted public multi-tenant hosting, deploy the backend inside an isolated container/VM sandbox (e.g., Docker/nsjail/Firecracker) or use the Online API provider.
 
 ### Installing External Backbone CLIs (Optional)
 

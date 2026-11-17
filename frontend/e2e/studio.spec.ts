@@ -212,4 +212,38 @@ int main() {
     await expect(explanationsList).toContainText("RAII Drop");
     await expect(explanationsList).toContainText("&mut vec");
   });
+
+  test("honestly labels regex fallback engine and flags unsupported C++ exceptions", async ({
+    page
+  }) => {
+    await page.goto("/");
+
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill(`#include <iostream>
+int main() {
+    try {
+        throw 1;
+    } catch (int e) {
+        std::cout << e << std::endl;
+    }
+    return 0;
+}`);
+
+    await expect(page.getByTestId("transpiler-engine-badge")).toContainText(
+      "Regex Fallback (Unverified)"
+    );
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "// [Unsupported C/C++ syntax in regex fallback]:"
+    );
+
+    await page.getByTestId("diagnostics-tab").click();
+    await expect(page.getByTestId("diagnostics-list")).toContainText(
+      "C++ exceptions ('try'/'catch'/'throw') are not supported by the fallback translator"
+    );
+  });
 });

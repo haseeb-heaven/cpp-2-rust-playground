@@ -4,9 +4,12 @@ pub mod line_translator;
 pub mod postprocessor;
 
 use crate::models::{
-    ConversionResponse, LineMapping, RustOutputStyle, SourceLanguage,
+    ConversionDiagnostic, ConversionResponse, DiagnosticSeverity, ErrorCategory, LineMapping,
+    RustOutputStyle, SourceLanguage,
 };
-use diagnostics::analyze_source_diagnostics;
+use diagnostics::{
+    analyze_base_source_diagnostics, analyze_source_diagnostics, detect_unsupported_constructs,
+};
 pub use explanations::generate_conversion_explanations;
 use line_translator::{translate_single_line, TranslatorState};
 use postprocessor::postprocess_rust_code;
@@ -98,8 +101,9 @@ pub fn try_invoke_external_backbone_engine(
     source_code: &str,
     source_language: &SourceLanguage,
     binary_path: &str,
-) -> Option<String> {
-    let temp_dir = TempEngineDirectory::create().ok()?;
+) -> Result<String, String> {
+    let temp_dir =
+        TempEngineDirectory::create().map_err(|e| format!("failed to create temp dir: {}", e))?;
 
     match source_language {
         SourceLanguage::C => {
@@ -107,60 +111,73 @@ pub fn try_invoke_external_backbone_engine(
             let compile_commands_file = temp_dir.path.join("compile_commands.json");
             let output_file = temp_dir.path.join("input.rs");
 
-            fs::write(&input_file, source_code).ok()?;
+            fs::write(&input_file, source_code)
+                .map_err(|e| format!("failed to write input.c: {}", e))?;
             let compile_commands = serde_json::json!([{
                 "directory": temp_dir.path.to_string_lossy(),
                 "command": format!("clang -std=c11 -c {}", input_file.to_string_lossy()),
                 "file": input_file.to_string_lossy(),
             }]);
-            fs::write(
-                &compile_commands_file,
-                serde_json::to_string_pretty(&compile_commands).ok()?,
-            )
-            .ok()?;
+            let serialized = serde_json::to_string_pretty(&compile_commands)
+                .map_err(|e| format!("failed to encode compile_commands.json: {}", e))?;
+            fs::write(&compile_commands_file, serialized)
+                .map_err(|e| format!("failed to write compile_commands.json: {}", e))?;
 
-            let status = Command::new(binary_path)
+            let output = Command::new(binary_path)
                 .arg("transpile")
                 .arg(&compile_commands_file)
                 .arg("--output-dir")
                 .arg(&temp_dir.path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .ok()?;
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .map_err(|e| format!("failed to spawn {}: {}", binary_path, e))?;
 
-            if !status.success() {
-                return None;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if stderr.is_empty() {
+                    format!("exited with status {}", output.status)
+                } else {
+                    stderr
+                });
             }
-            let generated = fs::read_to_string(&output_file).ok()?;
+            let generated = fs::read_to_string(&output_file)
+                .map_err(|e| format!("missing generated input.rs: {}", e))?;
             if generated.trim().is_empty() {
-                None
+                Err("external c2rust CLI produced empty output".to_string())
             } else {
-                Some(generated)
+                Ok(generated)
             }
         }
         SourceLanguage::Cpp => {
             let input_file = temp_dir.path.join("input.cpp");
             let output_file = temp_dir.path.join("output.rs");
 
-            fs::write(&input_file, source_code).ok()?;
+            fs::write(&input_file, source_code)
+                .map_err(|e| format!("failed to write input.cpp: {}", e))?;
 
-            let status = Command::new(binary_path)
+            let output = Command::new(binary_path)
                 .arg(format!("--file={}", input_file.display()))
                 .arg(format!("-o={}", output_file.display()))
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .ok()?;
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .map_err(|e| format!("failed to spawn {}: {}", binary_path, e))?;
 
-            if !status.success() {
-                return None;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if stderr.is_empty() {
+                    format!("exited with status {}", output.status)
+                } else {
+                    stderr
+                });
             }
-            let generated = fs::read_to_string(&output_file).ok()?;
+            let generated = fs::read_to_string(&output_file)
+                .map_err(|e| format!("missing generated output.rs: {}", e))?;
             if generated.trim().is_empty() {
-                None
+                Err("external cpp2rust CLI produced empty output".to_string())
             } else {
-                Some(generated)
+                Ok(generated)
             }
         }
     }
@@ -172,14 +189,14 @@ pub fn select_transpiler_engine(source_language: &SourceLanguage) -> String {
             if let Some(binary) = detect_external_transpiler_binary(source_language) {
                 format!("c2rust CLI ({})", binary)
             } else {
-                "c2rust (immunant/c2rust C99/C11 engine)".to_string()
+                "Built-in Regex C Fallback (c2rust CLI not installed)".to_string()
             }
         }
         SourceLanguage::Cpp => {
             if let Some(binary) = detect_external_transpiler_binary(source_language) {
                 format!("cpp2rust CLI ({})", binary)
             } else {
-                "cpp2rust (Cpp2Rust/cpp2rust Safe C++ engine)".to_string()
+                "Built-in Regex C++ Fallback (cpp2rust CLI not installed)".to_string()
             }
         }
     }
@@ -199,63 +216,86 @@ pub fn convert_source_to_rust_with_style(
 ) -> ConversionResponse {
     let start_instant = Instant::now();
     let source_lines: Vec<&str> = source_code.lines().collect();
-    let diagnostics = analyze_source_diagnostics(&source_lines);
+
+    let cli_name = match source_language {
+        SourceLanguage::C => "c2rust",
+        SourceLanguage::Cpp => "cpp2rust",
+    };
+
+    let mut fallback_reason = Some(format!(
+        "External {} CLI binary is not installed; used built-in regex-based fallback translator.",
+        cli_name
+    ));
 
     if let Some(binary_path) = detect_external_transpiler_binary(source_language) {
-        if let Some(faithful_rust_code) =
-            try_invoke_external_backbone_engine(source_code, source_language, &binary_path)
-        {
-            let engine_label = match source_language {
-                SourceLanguage::C => format!("c2rust CLI ({})", binary_path),
-                SourceLanguage::Cpp => format!("cpp2rust CLI ({})", binary_path),
-            };
-            let (idiomatic_rust_code, post_processing) =
-                postprocess_rust_code(&faithful_rust_code);
-            let explanations = generate_conversion_explanations(
-                source_code,
-                source_language,
-                &faithful_rust_code,
-                &idiomatic_rust_code,
-                &output_style,
-                &post_processing,
-            );
-            let generated_rust_code = match output_style {
-                RustOutputStyle::Faithful => faithful_rust_code.clone(),
-                RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
-            };
-            let selected_line_count = generated_rust_code.lines().count().max(1);
-            let line_mappings = source_lines
-                .iter()
-                .enumerate()
-                .map(|(idx, line_text)| LineMapping {
-                    source_line: idx + 1,
-                    rust_start_line: (idx + 1).min(selected_line_count),
-                    rust_end_line: (idx + 1).min(selected_line_count),
-                    source_text: (*line_text).to_string(),
-                    rust_text: String::new(),
-                })
-                .collect();
+        match try_invoke_external_backbone_engine(source_code, source_language, &binary_path) {
+            Ok(faithful_rust_code) => {
+                let engine_label = format!("{} CLI ({})", cli_name, binary_path);
+                let diagnostics = analyze_base_source_diagnostics(&source_lines);
+                let (idiomatic_rust_code, post_processing) =
+                    postprocess_rust_code(&faithful_rust_code);
+                let explanations = generate_conversion_explanations(
+                    source_code,
+                    source_language,
+                    &faithful_rust_code,
+                    &idiomatic_rust_code,
+                    &output_style,
+                    &post_processing,
+                    false,
+                    &engine_label,
+                );
+                let generated_rust_code = match output_style {
+                    RustOutputStyle::Faithful => faithful_rust_code.clone(),
+                    RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
+                };
+                let selected_line_count = generated_rust_code.lines().count().max(1);
+                let line_mappings = source_lines
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, line_text)| LineMapping {
+                        source_line: idx + 1,
+                        rust_start_line: (idx + 1).min(selected_line_count),
+                        rust_end_line: (idx + 1).min(selected_line_count),
+                        source_text: (*line_text).to_string(),
+                        rust_text: String::new(),
+                    })
+                    .collect();
 
-            return ConversionResponse {
-                generated_rust_code,
-                faithful_rust_code,
-                idiomatic_rust_code,
-                output_style,
-                line_mappings,
-                diagnostics,
-                required_imports: Vec::new(),
-                conversion_time_milliseconds: start_instant.elapsed().as_millis(),
-                transpiler_engine: engine_label,
-                post_processing,
-                explanations,
-            };
+                return ConversionResponse {
+                    generated_rust_code,
+                    faithful_rust_code,
+                    idiomatic_rust_code,
+                    output_style,
+                    line_mappings,
+                    diagnostics,
+                    required_imports: Vec::new(),
+                    conversion_time_milliseconds: start_instant.elapsed().as_millis(),
+                    transpiler_engine: engine_label,
+                    used_fallback: false,
+                    fallback_reason: None,
+                    unsupported_constructs: Vec::new(),
+                    post_processing,
+                    explanations,
+                };
+            }
+            Err(err_msg) => {
+                fallback_reason = Some(format!(
+                    "External {} CLI failed ({}); used built-in regex-based fallback translator.",
+                    cli_name, err_msg
+                ));
+            }
         }
     }
 
     let transpiler_engine = match source_language {
-        SourceLanguage::C => "c2rust (immunant/c2rust C99/C11 engine)".to_string(),
-        SourceLanguage::Cpp => "cpp2rust (Cpp2Rust/cpp2rust Safe C++ engine)".to_string(),
+        SourceLanguage::C => "Built-in Regex C Fallback (c2rust CLI not executed)".to_string(),
+        SourceLanguage::Cpp => {
+            "Built-in Regex C++ Fallback (cpp2rust CLI not executed)".to_string()
+        }
     };
+
+    let mut diagnostics = analyze_source_diagnostics(&source_lines);
+    let (_, unsupported_constructs) = detect_unsupported_constructs(&source_lines);
 
     let mut translator_state = TranslatorState::new();
     let mut translated_blocks: Vec<(usize, String, String)> = Vec::with_capacity(source_lines.len());
@@ -314,6 +354,31 @@ pub fn convert_source_to_rust_with_style(
 
     let faithful_rust_code = final_rust_lines.join("\n");
     let (idiomatic_rust_code, post_processing) = postprocess_rust_code(&faithful_rust_code);
+
+    if !post_processing.compiler_verified
+        && !source_code.trim().is_empty()
+        && !diagnostics
+            .iter()
+            .any(|diag| diag.severity == DiagnosticSeverity::Error)
+    {
+        diagnostics.push(ConversionDiagnostic {
+            line_number: 1,
+            severity: DiagnosticSeverity::Error,
+            category: ErrorCategory::Conversion,
+            message: format!(
+                "Fallback translation did not pass rustc verification: {}. The regex-based fallback translator cannot verify this C/C++ construct.",
+                post_processing
+                    .verification_error
+                    .as_deref()
+                    .unwrap_or("rustc verification failed")
+            ),
+            suggested_fix: Some(
+                "Install c2rust/cpp2rust CLI or inspect diagnostics and edit the generated Rust manually."
+                    .to_string(),
+            ),
+        });
+    }
+
     let explanations = generate_conversion_explanations(
         source_code,
         source_language,
@@ -321,6 +386,8 @@ pub fn convert_source_to_rust_with_style(
         &idiomatic_rust_code,
         &output_style,
         &post_processing,
+        true,
+        &transpiler_engine,
     );
     let generated_rust_code = match output_style {
         RustOutputStyle::Faithful => faithful_rust_code.clone(),
@@ -345,6 +412,9 @@ pub fn convert_source_to_rust_with_style(
         required_imports,
         conversion_time_milliseconds,
         transpiler_engine,
+        used_fallback: true,
+        fallback_reason,
+        unsupported_constructs,
         post_processing,
         explanations,
     }
@@ -611,7 +681,15 @@ int main(void) {
     #[test]
     fn dispatches_c_to_c2rust_and_cpp_to_cpp2rust_engines_with_rules() {
         let c_result = convert_source_to_rust("int main(void) { return 0; }", &SourceLanguage::C);
-        assert!(c_result.transpiler_engine.contains("c2rust"));
+        if detect_external_transpiler_binary(&SourceLanguage::C).is_none() {
+            assert!(c_result.used_fallback);
+            assert!(c_result.fallback_reason.is_some());
+            assert!(c_result.transpiler_engine.contains("Built-in Regex C Fallback"));
+            assert!(!c_result.transpiler_engine.starts_with("c2rust ("));
+        } else {
+            assert!(!c_result.used_fallback);
+            assert!(c_result.transpiler_engine.contains("c2rust CLI"));
+        }
 
         let cpp_source = r#"#include <utility>
 #include <limits>
@@ -623,7 +701,17 @@ int main() {
     return 0;
 }"#;
         let cpp_result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
-        assert!(cpp_result.transpiler_engine.contains("cpp2rust"));
+        if detect_external_transpiler_binary(&SourceLanguage::Cpp).is_none() {
+            assert!(cpp_result.used_fallback);
+            assert!(cpp_result.fallback_reason.is_some());
+            assert!(cpp_result
+                .transpiler_engine
+                .contains("Built-in Regex C++ Fallback"));
+            assert!(!cpp_result.transpiler_engine.starts_with("cpp2rust ("));
+        } else {
+            assert!(!cpp_result.used_fallback);
+            assert!(cpp_result.transpiler_engine.contains("cpp2rust CLI"));
+        }
         assert!(cpp_result
             .faithful_rust_code
             .contains("let mut p: (i32, i32) = (3, 7);"));
@@ -631,6 +719,35 @@ int main() {
         assert!(cpp_result.idiomatic_rust_code.contains("i32::MAX"));
         assert!(cpp_result.idiomatic_rust_code.contains("p.0"));
         assert!(cpp_result.idiomatic_rust_code.contains("p.1"));
+    }
+
+    #[test]
+    fn flags_unsupported_cpp_syntax_and_marks_fallback_unverified() {
+        let cpp_source = r#"#include <iostream>
+namespace demo {
+class Base {
+public:
+    virtual int compute() { return 1; }
+};
+}
+int main() {
+    try {
+        throw 42;
+    } catch (int e) {
+        std::cout << e << std::endl;
+    }
+    return 0;
+}"#;
+        let result = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
+        assert!(result.used_fallback);
+        assert!(!result.unsupported_constructs.is_empty());
+        assert!(!result.post_processing.compiler_verified);
+        assert!(result.diagnostics.iter().any(|d| {
+            d.severity == DiagnosticSeverity::Error && d.category == ErrorCategory::Conversion
+        }));
+        assert!(result
+            .generated_rust_code
+            .contains("// [Unsupported C/C++ syntax in regex fallback]:"));
     }
 
     #[cfg(unix)]

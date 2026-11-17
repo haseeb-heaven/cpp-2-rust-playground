@@ -51,6 +51,19 @@ describe("App component", () => {
                 diagnostics: [],
                 requiredImports: [],
                 conversionTimeMilliseconds: 2,
+                transpilerEngine: "Built-in Regex C++ Fallback (cpp2rust CLI not executed)",
+                usedFallback: true,
+                fallbackReason: "External cpp2rust CLI binary is not installed; used built-in regex-based fallback translator.",
+                unsupportedConstructs: [],
+                postProcessing: {
+                  appliedPasses: ["rustfmt"],
+                  rejectedPasses: [],
+                  formattedWithRustfmt: true,
+                  compilerVerified: true,
+                  unsafeBlocksRemoved: 0,
+                  redundantMutRemoved: 0,
+                  redundantCastsRemoved: 0
+                },
                 explanations: [
                   {
                     construct: "Dynamic Array (std::vector → Vec)",
@@ -137,6 +150,7 @@ describe("App component", () => {
     fireEvent.click(convertButton);
     await waitFor(() => {
       expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("println!(\"ok\")");
+      expect(screen.getByTestId("transpiler-engine-badge")).toHaveTextContent("Regex Fallback");
       expect(screen.getByTestId("output-explanation-summary")).toHaveTextContent("Vec<i32>");
     });
 

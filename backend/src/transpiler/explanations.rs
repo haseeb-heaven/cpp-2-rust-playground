@@ -307,6 +307,8 @@ fn push_loop_and_style_explanations(
     rust_code: &str,
     output_style: &RustOutputStyle,
     post_processing: &PostProcessingSummary,
+    used_fallback: bool,
+    transpiler_engine: &str,
     out: &mut Vec<ConversionExplanation>,
 ) {
     if source_code.contains("for (") || source_code.contains("for(") || rust_code.contains("for ") {
@@ -318,6 +320,15 @@ fn push_loop_and_style_explanations(
             ownership_and_iteration: "Ownership & Iteration: `&collection` iterates by shared reference without moving elements; `&mut collection` iterates by mutable reference for in-place edits; bare `collection` consumes and yields owned values.".to_string(),
         });
     }
+
+    let engine_note = if used_fallback {
+        format!(
+            "Translated by the built-in regex fallback ({}); fallback rules are heuristic and are not guaranteed equivalent for arbitrary C++ templates, overloads, or ownership unless compiled and tested.",
+            transpiler_engine
+        )
+    } else {
+        format!("Translated by primary transpiler engine ({}).", transpiler_engine)
+    };
 
     let (style_label, style_why) = match output_style {
         RustOutputStyle::Idiomatic => {
@@ -335,28 +346,43 @@ fn push_loop_and_style_explanations(
                 post_processing.compiler_verified
             );
             (
-                "Idiomatic Rust (Post-Processed & Compiler-Verified)",
+                "Idiomatic Rust (Optional Learning View)",
                 format!(
-                    "Idiomatic mode refines raw transpiler output to remove boilerplate comments, redundant `mut` bindings, unnecessary `as usize` casts, and trivial `unsafe` blocks, then runs `rustfmt` and `rustc` metadata verification ({}).",
-                    summary_details
+                    "{} Idiomatic mode is an optional learning view alongside Faithful Rust that removes boilerplate comments, redundant `mut`, unnecessary casts, and trivial `unsafe` blocks, then checks compilation with `rustc` ({}).",
+                    engine_note, summary_details
                 ),
             )
         }
         RustOutputStyle::Faithful => (
-            "Faithful Rust (Raw Backbone Output)",
-            "Faithful mode preserves the direct transpiler output structure, explicit C-style bindings, and diagnostic header comments 1:1 before idiomatic cleanups are applied.".to_string(),
+            "Faithful Rust (Raw Output)",
+            format!(
+                "{} Faithful mode preserves the uncleaned translator output 1:1 before optional idiomatic learning passes are applied.",
+                engine_note
+            ),
         ),
+    };
+
+    let verification_note = if post_processing.compiler_verified {
+        "Verification: `rustc --emit=metadata` succeeded on the displayed Rust code. Click Run C/C++ and Run Rust to compare runtime behavior.".to_string()
+    } else {
+        format!(
+            "Verification: NOT compiler-verified ({}). Review diagnostics before running or relying on this translation.",
+            post_processing
+                .verification_error
+                .as_deref()
+                .unwrap_or("rustc verification failed or was skipped")
+        )
     };
 
     out.push(ConversionExplanation {
         construct: format!("Output Mode ({})", style_label),
-        cpp_pattern: "c2rust / cpp2rust Pipeline".to_string(),
+        cpp_pattern: transpiler_engine.to_string(),
         rust_equivalent: match output_style {
-            RustOutputStyle::Idiomatic => "Idiomatic Rust".to_string(),
-            RustOutputStyle::Faithful => "Faithful Rust".to_string(),
+            RustOutputStyle::Idiomatic => "Idiomatic Rust (Learning Mode)".to_string(),
+            RustOutputStyle::Faithful => "Faithful Rust (Raw Output)".to_string(),
         },
         why_chosen: style_why,
-        ownership_and_iteration: "Verification: Any post-processing transform that breaks Rust borrow-checking or type inference is automatically rolled back to Faithful Rust so program semantics never silently diverge.".to_string(),
+        ownership_and_iteration: verification_note,
     });
 }
 
@@ -367,6 +393,8 @@ pub fn generate_conversion_explanations(
     idiomatic_rust: &str,
     output_style: &RustOutputStyle,
     post_processing: &PostProcessingSummary,
+    used_fallback: bool,
+    transpiler_engine: &str,
 ) -> Vec<ConversionExplanation> {
     let active_rust = match output_style {
         RustOutputStyle::Faithful => faithful_rust,
@@ -383,6 +411,8 @@ pub fn generate_conversion_explanations(
         active_rust,
         output_style,
         post_processing,
+        used_fallback,
+        transpiler_engine,
         &mut explanations,
     );
 

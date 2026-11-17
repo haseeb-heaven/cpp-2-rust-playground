@@ -37,6 +37,7 @@ export interface PostProcessingSummary {
   rejectedPasses: string[];
   formattedWithRustfmt: boolean;
   compilerVerified: boolean;
+  verificationError?: string | null;
   unsafeBlocksRemoved: number;
   redundantMutRemoved: number;
   redundantCastsRemoved: number;
@@ -60,6 +61,9 @@ export interface ConversionResponse {
   requiredImports: string[];
   conversionTimeMilliseconds: number;
   transpilerEngine?: string;
+  usedFallback?: boolean;
+  fallbackReason?: string | null;
+  unsupportedConstructs?: string[];
   postProcessing?: PostProcessingSummary;
   explanations?: ConversionExplanation[];
 }
