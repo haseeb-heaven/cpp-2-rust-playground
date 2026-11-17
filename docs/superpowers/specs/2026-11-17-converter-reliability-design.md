@@ -30,10 +30,18 @@ C11 slab-backed LRU cache with WAL persistence.
 ## Architecture
 
 The frontend owns selected output style and passes it with every conversion
-request. The backend converts source once to faithful Rust, records engine and
-fallback metadata, then conditionally post-processes that faithful output for
-idiomatic Rust. The API returns both variants, the selected generated variant,
-post-processing verification status, diagnostics, and line mappings.
+request. The backend uses the upstream AST-based backbones only: Immunant
+[`c2rust`](https://github.com/immunant/c2rust) for C and
+[`cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) for C++. It converts source
+once to faithful Rust, records engine and fallback metadata, then conditionally
+post-processes that faithful output for idiomatic Rust. The API returns both
+variants, the selected generated variant, post-processing verification status,
+diagnostics, and line mappings.
+
+The existing built-in translator remains a clearly labeled degraded fallback
+only when its corresponding backbone executable is absent or fails. This work
+does not replace, fork, or attempt to reimplement either upstream compiler
+front end.
 
 The UI switches displayed generated Rust from API-returned variants only. A
 mode switch triggers a conversion with the newly chosen style rather than
@@ -75,4 +83,5 @@ successes.
 - Claiming that the built-in regex fallback fully translates arbitrary C11 or
   C++17.
 - Replacing external AST-based engines with a new general-purpose parser.
+- Treating the built-in fallback as a substitute for c2rust or cpp2rust.
 - Overwriting a user’s manual Rust edits on mode changes.
