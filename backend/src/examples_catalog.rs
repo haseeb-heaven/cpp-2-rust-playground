@@ -1129,5 +1129,84 @@ int main(void) {
             .to_string(),
             default_stdin: String::new(),
         },
+        CodeExample {
+            identifier: "c-record-crud-array".to_string(),
+            title: "Record CRUD with C Arrays (C11)".to_string(),
+            category: "Standard Library CRUD".to_string(),
+            difficulty: "Medium".to_string(),
+            source_language: SourceLanguage::C,
+            description: "Creates, reads, updates, and deletes fixed-capacity records using a C11 struct array and stdio output.".to_string(),
+            source_code: r#"#include <stdio.h>
+
+typedef struct {
+    int id;
+    int score;
+} Record;
+
+int main(void) {
+    Record records[4] = {{1, 70}, {2, 80}};
+    int count = 2;
+
+    // Create
+    records[count++] = (Record){3, 90};
+    // Read
+    printf("Read: id=%d score=%d\n", records[1].id, records[1].score);
+    // Update
+    records[1].score = 85;
+    // Delete id=1 by shifting remaining records left.
+    for (int i = 0; i < count - 1; i++) {
+        if (records[i].id == 1) {
+            for (int j = i; j < count - 1; j++) {
+                records[j] = records[j + 1];
+            }
+            count--;
+            break;
+        }
+    }
+
+    printf("After CRUD (%d records):", count);
+    for (int i = 0; i < count; i++) {
+        printf(" %d:%d", records[i].id, records[i].score);
+    }
+    printf("\n");
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
+        CodeExample {
+            identifier: "cpp-map-crud".to_string(),
+            title: "Map CRUD with STL (C++)".to_string(),
+            category: "Standard Library CRUD".to_string(),
+            difficulty: "Medium".to_string(),
+            source_language: SourceLanguage::Cpp,
+            description: "Creates, reads, updates, and deletes named scores with std::map and iterates the final collection.".to_string(),
+            source_code: r#"#include <iostream>
+#include <map>
+#include <string>
+
+int main() {
+    std::map<std::string, int> scores;
+
+    // Create
+    scores["Ada"] = 90;
+    scores["Linus"] = 80;
+    // Read
+    std::cout << "Read: Ada=" << scores["Ada"] << std::endl;
+    // Update
+    scores["Ada"] = 95;
+    // Delete
+    scores.erase("Linus");
+
+    std::cout << "After CRUD:";
+    for (const auto& [name, score] : scores) {
+        std::cout << " " << name << "=" << score;
+    }
+    std::cout << std::endl;
+    return 0;
+}"#
+            .to_string(),
+            default_stdin: String::new(),
+        },
     ]
 }
