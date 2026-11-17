@@ -8,6 +8,7 @@ Thank you to all human maintainers, upstream transpiler projects, and AI co-cont
 |---|---|---|
 | **Haseeb Mir** | [@haseeb-heaven](https://github.com/haseeb-heaven) | Creator & Maintainer |
 | **Gemini Code Assist** | [`gemini-code-assist[bot]`](https://github.com/apps/gemini-code-assist) | AI Co-Contributor — C/C++ Transpiler Integration, Post-Processing, Diagnostics & Test Suite |
+| **OpenAI Codex** | — | AI Co-Contributor — converter reliability, verification, and test coverage |
 
 ## Backbone Transpiler Credits
 
