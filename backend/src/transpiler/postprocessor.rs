@@ -132,14 +132,513 @@ static USIZE_PARAM_REGEX: Lazy<Regex> =
 static LET_MUT_DECL_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\blet\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\b").unwrap());
 
+/// Fixed-width Rust types that replace the C ABI types c2rust emits.
+static C_ABI_TYPE_MAP: &[(&str, &str)] = &[
+    ("::core::ffi::c_uint", "u32"),
+    ("::core::ffi::c_int", "i32"),
+    ("::core::ffi::c_ushort", "u16"),
+    ("::core::ffi::c_short", "i16"),
+    ("::core::ffi::c_ulonglong", "u64"),
+    ("::core::ffi::c_longlong", "i64"),
+    ("::core::ffi::c_ulong", "u64"),
+    ("::core::ffi::c_long", "i64"),
+    ("::core::ffi::c_uchar", "u8"),
+    ("::core::ffi::c_schar", "i8"),
+    ("::core::ffi::c_char", "i8"),
+    ("::core::ffi::c_float", "f32"),
+    ("::core::ffi::c_double", "f64"),
+    ("::core::ffi::c_size_t", "usize"),
+    ("::core::ffi::c_ssize_t", "isize"),
+    ("::core::ffi::c_bool", "bool"),
+];
+
+/// Generated runtime plumbing of the vendored cpp2rust engine. This is never Rust
+/// a reader wrote, so it can never be presented as Idiomatic output.
 fn contains_engine_runtime_scaffolding(code: &str) -> bool {
-    code.contains("extern crate libcc2rs")
-        || code.contains("use libcc2rs")
-        || code.contains("::core::ffi")
-        || code.contains("extern \"C\"")
+    code.contains("libcc2rs")
         || code.contains("Ptr::<")
         || code.contains("Value<Vec<")
-        || code.contains("unsafe fn main_0")
+        || code.contains("__cpp2rust_init_globals")
+}
+
+/// Text that is still a literal transcription of the C source: C ABI types the
+/// normalizer failed to rewrite, or engine plumbing. Accepting it as Idiomatic
+/// would claim a human-readable translation that was never produced.
+fn still_raw_engine_transcription(faithful_rust: &str, idiomatic_candidate: &str) -> bool {
+    if contains_engine_runtime_scaffolding(idiomatic_candidate) {
+        return true;
+    }
+    idiomatic_candidate == faithful_rust
+        && (faithful_rust.contains("::core::ffi")
+            || faithful_rust.contains("extern crate libcc2rs"))
+}
+
+fn rewrite_c2rust_entrypoint(code: &str) -> Option<String> {
+    static ENTRYPOINT_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?s)pub\s+fn\s+main\s*\(\s*\)\s*\{\s*unsafe\s*\{\s*::std::process::exit\(\s*main_0\(\)(?:\s*as\s+i32)?\s*\)\s*\}\s*\}"#,
+        )
+        .unwrap()
+    });
+    if !ENTRYPOINT_REGEX.is_match(code) {
+        return None;
+    }
+    Some(
+        ENTRYPOINT_REGEX
+            .replace(
+                code,
+                "fn main() {\n    let exit_code = unsafe { main_0() };\n    std::process::exit(exit_code);\n}",
+            )
+            .to_string(),
+    )
+}
+
+fn find_matching_delimiter(text: &str, open_index: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    for (offset, ch) in text[open_index..].char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            _ if ch == open => depth += 1,
+            _ if ch == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_index + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level_arguments(text: &str) -> Vec<&str> {
+    let mut arguments = Vec::new();
+    let mut depth = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    let mut start = 0usize;
+    for (offset, ch) in text.char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                arguments.push(text[start..offset].trim());
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    arguments.push(text[start..].trim());
+    arguments
+}
+
+/// Translates a C `printf` format body into a Rust format body.
+/// Returns `None` for conversions that cannot be preserved by a plain Rust
+/// format argument (`%s` pointer operands, `%p`, `%c`, `*` width, ...).
+fn c_printf_format_to_rust(format_body: &str) -> Option<(String, bool)> {
+    use std::fmt::Write as _;
+
+    let without_nul = format_body.strip_suffix("\\0")?;
+    let (body, println) = match without_nul.strip_suffix("\\n") {
+        Some(rest) => (rest, true),
+        None => (without_nul, false),
+    };
+
+    let mut output = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            output.push(ch);
+            if let Some(next) = chars.next() {
+                output.push(next);
+            }
+            continue;
+        }
+        if ch != '%' {
+            match ch {
+                '{' => output.push_str("{{"),
+                '}' => output.push_str("}}"),
+                _ => output.push(ch),
+            }
+            continue;
+        }
+
+        let mut flags = String::new();
+        while matches!(chars.peek(), Some('-') | Some('+') | Some(' ') | Some('0') | Some('#')) {
+            flags.push(chars.next().unwrap());
+        }
+        let mut width = String::new();
+        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+            width.push(chars.next().unwrap());
+        }
+        let mut precision: Option<String> = None;
+        if chars.peek() == Some(&'.') {
+            chars.next();
+            let mut digits = String::new();
+            while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+                digits.push(chars.next().unwrap());
+            }
+            precision = Some(digits);
+        }
+        while matches!(chars.peek(), Some('h') | Some('l') | Some('z') | Some('j') | Some('t') | Some('L')) {
+            chars.next();
+        }
+        let conversion = chars.next()?;
+
+        if conversion == '%' {
+            output.push('%');
+            continue;
+        }
+        if !flags.is_empty() || !width.is_empty() {
+            return None;
+        }
+        match conversion {
+            'd' | 'i' | 'u' => output.push_str("{}"),
+            'f' | 'F' | 'e' | 'E' | 'g' | 'G' => match precision.as_deref() {
+                Some(digits) if !digits.is_empty() => {
+                    let _ = write!(output, "{{:.{digits}}}");
+                }
+                // C prints six fractional digits by default.
+                _ => output.push_str("{:.6}"),
+            },
+            _ => return None,
+        }
+    }
+    Some((output, println))
+}
+
+/// Rewrites `printf` statements into `print!`/`println!` when the call keeps the
+/// same output. Unsupported calls are left untouched for the C ABI path.
+fn lower_printf_calls(code: &str) -> (String, bool) {
+    static OTHER_C_STDIO_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\b(?:puts|putchar|fputs|fwrite|fprintf|scanf|fscanf|fgets|fflush|perror)\s*\(")
+            .unwrap()
+    });
+    // Rust's stdout buffer and the C stdio buffer are independent, so lowering only
+    // some of the writes would reorder the program's output.
+    if OTHER_C_STDIO_REGEX.is_match(code) {
+        return (code.to_string(), false);
+    }
+
+    static PRINTF_FORMAT_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?s)^b"((?:[^"\\]|\\.)*)"\s*(?:as\s+\*const\s+u8\s+as\s+\*const\s+(?:::core::ffi::)?(?:c_char|i8))?\s*$"#,
+        )
+        .unwrap()
+    });
+
+    let mut result = String::with_capacity(code.len());
+    let mut rest = code;
+    let mut changed = false;
+
+    while let Some(position) = rest.find("printf") {
+        let is_boundary = position == 0
+            || !rest[..position]
+                .chars()
+                .last()
+                .map(|ch| ch.is_alphanumeric() || ch == '_')
+                .unwrap_or(false);
+        if !is_boundary {
+            result.push_str(&rest[..position + "printf".len()]);
+            rest = &rest[position + "printf".len()..];
+            continue;
+        }
+
+        result.push_str(&rest[..position]);
+        let call = &rest[position..];
+        let Some(open_offset) = call.find('(') else {
+            result.push_str(call);
+            rest = "";
+            break;
+        };
+        if call[..open_offset].trim() != "printf" {
+            result.push_str(&call[..open_offset + 1]);
+            rest = &call[open_offset + 1..];
+            continue;
+        }
+        let Some(close_offset) = find_matching_delimiter(call, open_offset, '(', ')') else {
+            result.push_str(call);
+            rest = "";
+            break;
+        };
+        let trailing = &call[close_offset + 1..];
+        let statement_end = trailing.find(';');
+        let Some(statement_end) = statement_end else {
+            result.push_str(&call[..close_offset + 1]);
+            rest = &call[close_offset + 1..];
+            continue;
+        };
+        if !trailing[..statement_end].trim().is_empty() {
+            result.push_str(&call[..close_offset + 1]);
+            rest = &call[close_offset + 1..];
+            continue;
+        }
+
+        let arguments = split_top_level_arguments(&call[open_offset + 1..close_offset]);
+        let lowerable = arguments
+            .first()
+            .and_then(|format| PRINTF_FORMAT_REGEX.captures(format))
+            .and_then(|captures| c_printf_format_to_rust(&captures[1]));
+
+        let Some((format, println)) = lowerable else {
+            result.push_str(&call[..close_offset + 1]);
+            rest = &call[close_offset + 1..];
+            continue;
+        };
+
+        let macro_name = if println { "println!" } else { "print!" };
+        let operands: Vec<&str> = arguments[1..]
+            .iter()
+            .copied()
+            .filter(|argument| !argument.is_empty())
+            .collect();
+        if operands.is_empty() {
+            result.push_str(&format!("{macro_name}(\"{format}\")"));
+        } else {
+            result.push_str(&format!(
+                "{macro_name}(\"{format}\", {})",
+                operands.join(", ")
+            ));
+        }
+        result.push_str(&trailing[statement_end..=statement_end]);
+        changed = true;
+        rest = &trailing[statement_end + 1..];
+    }
+    result.push_str(rest);
+    (result, changed)
+}
+
+/// Splits an `extern "C"` body into items that end at a top-level `;`.
+fn split_ffi_declaration_items(body: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (offset, ch) in body.char_indices() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ';' if depth == 0 => {
+                items.push(&body[start..=offset]);
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    if !body[start..].trim().is_empty() {
+        items.push(&body[start..]);
+    }
+    items
+}
+
+/// Drops `extern "C"` declarations that nothing calls any more, and the whole
+/// block once it is empty.
+fn prune_unused_c_ffi_blocks(code: &str) -> (String, bool) {
+    static DECLARED_FN_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap());
+    static OTHER_ITEM_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^\s*(?:pub\s+)?(?:static|type|const|use|struct|enum)\b").unwrap());
+
+    let mut result = String::with_capacity(code.len());
+    let mut remaining = code;
+    let mut changed = false;
+
+    while let Some(position) = remaining.find("extern \"C\" {") {
+        result.push_str(&remaining[..position]);
+        let block = &remaining[position..];
+        let open_offset = block.find('{').unwrap();
+        let Some(close_offset) = find_matching_delimiter(block, open_offset, '{', '}') else {
+            result.push_str(block);
+            return (result, changed);
+        };
+        let body = &block[open_offset + 1..close_offset];
+        let outer = format!("{}{}", result, &remaining[position + close_offset + 1..]);
+
+        let mut kept_items = String::new();
+        let mut dropped_any = false;
+        for item in split_ffi_declaration_items(body) {
+            let declared = DECLARED_FN_REGEX.captures(item).map(|c| c[1].to_string());
+            if OTHER_ITEM_REGEX.is_match(item) {
+                kept_items.push_str(item);
+                continue;
+            }
+            let Some(name) = declared else {
+                kept_items.push_str(item);
+                continue;
+            };
+            let used = Regex::new(&format!(r"\b{}\b", regex::escape(&name)))
+                .map(|pattern| pattern.is_match(&outer))
+                .unwrap_or(true);
+            if used {
+                kept_items.push_str(item);
+            } else {
+                dropped_any = true;
+            }
+        }
+
+        let block_empty = kept_items.trim().is_empty();
+        if block_empty || dropped_any {
+            changed = true;
+            if !block_empty {
+                result.push_str("extern \"C\" {");
+                result.push_str(&kept_items);
+                result.push('}');
+            }
+        } else {
+            result.push_str(&block[..close_offset + 1]);
+        }
+        remaining = &remaining[position + close_offset + 1..];
+    }
+    result.push_str(remaining);
+    (result, changed)
+}
+
+/// Folds `sizeof([T; N]) / sizeof(T)` back into the array length and, when the
+/// enclosing loop walks a fixed-size array binding, expresses the bound with
+/// `.len()` instead of the literal length.
+fn simplify_c_array_length_bounds(code: &str) -> (String, bool) {
+    static SIZE_DIV_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?s)\(\s*(?:::core::mem::)?size_of::<\[[^;]+;\s*(\d+)\]>\s*\(\s*\)\s*as\s+usize\s*\)\s*\.\s*wrapping_div\s*\(\s*(?:::core::mem::)?size_of::<[^<>]+>\s*\(\s*\)\s*as\s+usize\s*\)",
+        )
+        .unwrap()
+    });
+    static LOOP_BOUND_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"while\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+as\s+usize\s*\)\s*<\s*(\d+)\s*\{").unwrap()
+    });
+
+    let folded = SIZE_DIV_REGEX.replace_all(code, "$1").to_string();
+    let mut changed = folded != code;
+    let mut updated = folded;
+
+    let mut rewrite_at: Vec<(usize, usize, String)> = Vec::new();
+    for captures in LOOP_BOUND_REGEX.captures_iter(&updated) {
+        let whole = captures.get(0).unwrap();
+        let index_var = captures[1].to_string();
+        let length = captures[2].to_string();
+        let Some(close) = find_matching_delimiter(&updated, whole.end() - 1, '{', '}') else {
+            continue;
+        };
+        let body = &updated[whole.end()..close];
+        let index_regex =
+            Regex::new(&format!(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*{}\s+as\s+usize\s*\]", regex::escape(&index_var))).unwrap();
+        let Some(array_name) = index_regex
+            .captures(body)
+            .map(|captures| captures[1].to_string())
+        else {
+            continue;
+        };
+        let declaration_regex = Regex::new(&format!(
+            r"let\s+(?:mut\s+)?{}\s*:\s*\[[^;\]]+;\s*{}\]",
+            regex::escape(&array_name),
+            regex::escape(&length)
+        ))
+        .unwrap();
+        if !declaration_regex.is_match(&updated) {
+            continue;
+        }
+        rewrite_at.push((
+            whole.start(),
+            whole.end(),
+            format!("while ({index_var} as usize) < {array_name}.len() {{"),
+        ));
+    }
+
+    for (start, end, replacement) in rewrite_at.into_iter().rev() {
+        updated.replace_range(start..end, &replacement);
+        changed = true;
+    }
+
+    (updated, changed)
+}
+
+/// Language-wide readability pass over a C translation: replaces the C ABI type
+/// names with Rust types, lowers `printf` to Rust formatting macros, and removes
+/// the generated entrypoint wrapper. It never inspects identifiers or program
+/// shapes, so it applies to any C source the upstream engine accepts.
+fn normalize_c_abi_translation(code: &str) -> (String, bool) {
+    static DROP_GENERATED_PUB: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"\bpub\s+(unsafe\s+extern\s+"C"\s+fn\s+|extern\s+"C"\s+fn\s+)"#).unwrap()
+    });
+    static LITERAL_CAST_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\b(\d+)\s+as\s+(i8|i16|i32|i64|u8|u16|u32|u64|usize|isize)\b").unwrap()
+    });
+
+    let mut updated = code.to_string();
+
+    if let Some(rewritten) = rewrite_c2rust_entrypoint(&updated) {
+        updated = rewritten;
+    }
+
+    updated = updated
+        .lines()
+        .filter(|line| line.trim() != "#[no_mangle]")
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Type names first: `printf` lowering then sees plain Rust pointer types.
+    for (c_type, rust_type) in C_ABI_TYPE_MAP {
+        if updated.contains(c_type) {
+            updated = updated.replace(c_type, rust_type);
+        }
+    }
+
+    let (lowered, printf_changed) = lower_printf_calls(&updated);
+    if printf_changed {
+        updated = lowered;
+    }
+
+    let (bounds_simplified, bounds_changed) = simplify_c_array_length_bounds(&updated);
+    if bounds_changed {
+        updated = bounds_simplified;
+    }
+
+    updated = updated.replace("println!(\"\")", "println!()");
+
+    // c2rust exports every translated function to C; a standalone program keeps the
+    // C ABI on its definitions (callbacks such as `qsort` comparators need it) but not
+    // the `pub` that only made sense inside the generated crate.
+    updated = DROP_GENERATED_PUB.replace_all(&updated, "$1").to_string();
+
+    for _ in 0..3 {
+        let rewritten = LITERAL_CAST_REGEX
+            .replace_all(&updated, "$1$2")
+            .to_string();
+        if rewritten == updated {
+            break;
+        }
+        updated = rewritten;
+    }
+
+    let (pruned, pruned_changed) = prune_unused_c_ffi_blocks(&updated);
+    if pruned_changed {
+        updated = pruned;
+    }
+
+    let changed = updated != code;
+    (updated, changed)
 }
 
 fn simplify_cpp2rust_runtime_scaffolding(code: &str) -> (String, bool) {
@@ -648,9 +1147,25 @@ fn strip_transpiler_boilerplate(code: &str) -> (String, bool) {
 }
 
 fn unwrap_trivial_unsafe_blocks(code: &str) -> (String, usize) {
+    static UNSAFE_FN_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"\bunsafe\s+(?:extern\s+"C"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"#).unwrap()
+    });
+
     let mut updated = code.replace("pub unsafe fn main(", "fn main(");
     updated = updated.replace("unsafe fn main(", "fn main(");
     let mut count = if updated != code { 1 } else { 0 };
+
+    let unsafe_functions: Vec<String> = UNSAFE_FN_REGEX
+        .captures_iter(code)
+        .map(|captures| captures[1].to_string())
+        .collect();
+    let calls_unsafe_function = |inner: &str| {
+        unsafe_functions.iter().any(|name| {
+            Regex::new(&format!(r"\b{}\s*\(", regex::escape(name)))
+                .map(|pattern| pattern.is_match(inner))
+                .unwrap_or(true)
+        })
+    };
 
     let unsafe_block_regex = Regex::new(r"\bunsafe\s*\{([^{}]*)\}").unwrap();
     loop {
@@ -666,7 +1181,10 @@ fn unwrap_trivial_unsafe_blocks(code: &str) -> (String, usize) {
                     || trimmed_inner.contains("as_ptr")
                     || trimmed_inner.contains("as_mut_ptr")
                     || trimmed_inner.contains("get_unchecked")
-                    || trimmed_inner.contains("extern");
+                    || trimmed_inner.contains("extern")
+                    || trimmed_inner.contains("&raw")
+                    || trimmed_inner.contains(".offset(")
+                    || calls_unsafe_function(trimmed_inner);
                 if has_unsafe_op {
                     captures.get(0).unwrap().as_str().to_string()
                 } else {
@@ -1350,6 +1868,14 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
         }
     }
 
+    let (abi_normalized, abi_changed) = normalize_c_abi_translation(&candidate);
+    if abi_changed {
+        candidate = abi_normalized;
+        summary
+            .applied_passes
+            .push("normalize_c_abi_translation".to_string());
+    }
+
     let (external_out, external_passes) = try_external_c2rust_tools(&candidate);
     if !external_passes.is_empty() {
         candidate = external_out;
@@ -1392,11 +1918,19 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
 
     let (mut_cleaned, mut_removed) = remove_unnecessary_mut(&candidate);
     if mut_removed > 0 {
-        candidate = mut_cleaned;
-        summary.redundant_mut_removed += mut_removed;
-        summary
-            .applied_passes
-            .push("remove_unnecessary_mut".to_string());
+        let (verified, accepted) = verify_or_rollback_transformation(
+            &candidate,
+            &mut_cleaned,
+            "remove_unnecessary_mut",
+            &mut summary.rejected_passes,
+        );
+        if accepted {
+            candidate = verified;
+            summary.redundant_mut_removed += mut_removed;
+            summary
+                .applied_passes
+                .push("remove_unnecessary_mut".to_string());
+        }
     }
 
     if let Some(formatted) = format_with_rustfmt(&candidate) {
@@ -1424,10 +1958,10 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 }
             }
 
-            if contains_engine_runtime_scaffolding(&candidate) {
+            if still_raw_engine_transcription(faithful_rust, &candidate) {
                 summary.compiler_verified = false;
                 summary.verification_error = Some(
-                    "Upstream output still contains runtime/FFI scaffolding; it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
+                    "Upstream output is still a raw engine transcription (C ABI/runtime scaffolding); it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
                         .to_string(),
                 );
                 summary.rejected_passes.push(
@@ -1445,10 +1979,10 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 candidate_err
             ));
             summary.formatted_with_rustfmt = false;
-            if contains_engine_runtime_scaffolding(faithful_rust) {
+            if still_raw_engine_transcription(faithful_rust, faithful_rust) {
                 summary.compiler_verified = false;
                 summary.verification_error = Some(
-                    "Upstream output still contains runtime/FFI scaffolding; it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
+                    "Upstream output is still a raw engine transcription (C ABI/runtime scaffolding); it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
                         .to_string(),
                 );
                 summary.rejected_passes.push(
@@ -1614,12 +2148,16 @@ pub fn __cpp2rust_init_globals() {}"#;
     }
 
     #[test]
-    fn rejects_raw_c2rust_ffi_scaffolding_as_idiomatic() {
-        let faithful = r#"extern "C" {
-    fn puts(_: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
-}
-unsafe fn main_0() -> ::core::ffi::c_int {
-    0
+    fn rejects_cpp2rust_runtime_scaffolding_as_idiomatic() {
+        let faithful = r#"extern crate libcc2rs;
+use libcc2rs::*;
+fn main_0() -> i32 {
+    let mut __bytes = Ptr::<i8>::from_string_literal(b"hi").to_c_u8_bytes();
+    __bytes.push(b'\n');
+    match libcc2rs::c_stdout().with_mut(|__f| __f.write(&__bytes)) == __bytes.len() {
+        true => 0,
+        false => -1,
+    }
 }
 pub fn main() {
     unsafe { ::std::process::exit(main_0() as i32) }
@@ -1632,6 +2170,92 @@ pub fn main() {
             .verification_error
             .as_deref()
             .unwrap_or_default()
-            .contains("runtime/FFI scaffolding"));
+            .contains("raw engine transcription"));
+    }
+
+    #[test]
+    fn normalizes_c_abi_types_entrypoint_and_printf_for_any_c_translation() {
+        let faithful = r#"extern "C" {
+    fn printf(_: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
+}
+unsafe fn main_0() -> ::core::ffi::c_int {
+    let mut idx: ::core::ffi::c_int = 0 as ::core::ffi::c_int;
+    while idx < 3 as ::core::ffi::c_int {
+        printf(
+            b"value=%d\n\0" as *const u8 as *const ::core::ffi::c_char,
+            idx,
+        );
+        idx += 1;
+    }
+    return 0 as ::core::ffi::c_int;
+}
+pub fn main() {
+    unsafe { ::std::process::exit(main_0() as i32) }
+}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(summary
+            .applied_passes
+            .iter()
+            .any(|pass| pass == "normalize_c_abi_translation"));
+        assert!(!idiomatic.contains("::core::ffi"));
+        assert!(!idiomatic.contains("printf"));
+        assert!(idiomatic.contains("println!(\"value={}\""));
+        assert!(idiomatic.contains("unsafe fn main_0() -> i32"));
+        assert!(idiomatic.contains("fn main()"));
+        assert!(idiomatic.contains("let exit_code = unsafe { main_0() };"));
+    }
+
+    #[test]
+    fn keeps_unlowerable_printf_and_its_declaration_intact() {
+        let faithful = r#"extern "C" {
+    fn printf(_: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
+}
+unsafe fn main_0() -> ::core::ffi::c_int {
+    printf(b"%s\0" as *const u8 as *const ::core::ffi::c_char, b"hi\0" as *const u8);
+    return 0;
+}
+pub fn main() {
+    unsafe { ::std::process::exit(main_0() as i32) }
+}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(idiomatic.contains("printf("));
+        assert!(idiomatic.contains("fn printf("));
+        assert!(!idiomatic.contains("print!(\"%s\""));
+    }
+
+    #[test]
+    fn prunes_unused_c_ffi_declarations_only() {
+        let code = r#"extern "C" {
+    fn printf(_: *const i8, ...) -> i32;
+    fn puts(_: *const i8) -> i32;
+}
+fn main() {
+    printf(b"%d\0" as *const u8 as *const i8, 1);
+}"#;
+
+        let (pruned, changed) = prune_unused_c_ffi_blocks(code);
+        assert!(changed);
+        assert!(!pruned.contains("fn puts"));
+        assert!(pruned.contains("fn printf"));
+    }
+
+    #[test]
+    fn lowers_supported_printf_format_specifiers() {
+        let (format, println) = c_printf_format_to_rust(r"count=%d ratio=%.2f\n\0").unwrap();
+        assert_eq!(format, "count={} ratio={:.2}");
+        assert!(println);
+
+        let (format, println) = c_printf_format_to_rust(r"%u items\0").unwrap();
+        assert_eq!(format, "{} items");
+        assert!(!println);
+
+        assert!(c_printf_format_to_rust(r"%s\0").is_none());
+        assert!(c_printf_format_to_rust(r"%p\0").is_none());
+        assert!(c_printf_format_to_rust(r"%5d\0").is_none());
     }
 }
+

@@ -1732,12 +1732,22 @@ int main(void) {
         if detect_external_transpiler_binary(&SourceLanguage::C).is_some() {
             assert!(!res.used_fallback, "c2rust must be used without fallback when installed: {:?}", res.fallback_reason);
             assert!(res.transpiler_engine.contains("c2rust CLI"));
+            assert!(res.faithful_rust_code.contains("pub struct Arena") || res.faithful_rust_code.contains("pub struct AnonStruct"));
+
+            // Faithful keeps the real c2rust output, and that output must be valid Rust.
+            assert!(
+                postprocessor::check_rustc_and_collect_diagnostics(&res.faithful_rust_code).is_ok(),
+                "c2rust Faithful output for the dijkstra program must compile"
+            );
+
+            // Idiomatic is the compiler-verified readability normalization of that output.
             assert!(
                 res.post_processing.compiler_verified,
                 "translated c2rust dijkstra program must pass rustc verification: {:?}",
                 res.post_processing.verification_error
             );
-            assert!(res.faithful_rust_code.contains("pub struct Arena") || res.faithful_rust_code.contains("pub struct AnonStruct"));
+            assert!(!res.generated_rust_code.contains("::core::ffi::c_int"));
+            assert!(!res.generated_rust_code.contains("#[no_mangle]"));
             assert!(res.generated_rust_code.contains("dijkstra_shortest_path"));
         }
     }
@@ -2116,6 +2126,46 @@ int main() {
         let faithful = convert_source_to_rust_with_style(cpp_code, &SourceLanguage::Cpp, RustOutputStyle::Faithful);
         assert!(!faithful.generated_rust_code.trim().is_empty());
         assert_ne!(idiomatic.generated_rust_code, faithful.generated_rust_code);
+    }
+
+    #[test]
+    fn converts_c_malloc_and_printf_program_to_verified_idiomatic_rust() {
+        let source = r#"#include <stdio.h>
+#include <stdlib.h>
+
+int main() {
+    int *arr = (int*)malloc(sizeof(int) * 4);
+
+    for(int idx = 0; idx < 4; idx++){
+      arr[idx] = idx + 10;
+    }
+
+    for(int idx = 0; idx < 4; idx++){
+      printf("%d", arr[idx]);
+    }
+
+    return 0;
+}"#;
+
+        let result = convert_source_to_rust_with_style(
+            source,
+            &SourceLanguage::C,
+            RustOutputStyle::Idiomatic,
+        );
+        if detect_external_transpiler_binary(&SourceLanguage::C).is_none() {
+            return;
+        }
+        assert!(
+            result.post_processing.compiler_verified,
+            "{:?}",
+            result.post_processing.verification_error
+        );
+        assert!(!result.generated_rust_code.contains("::core::ffi::c_int"));
+        assert!(!result.generated_rust_code.contains("::core::ffi::c_char"));
+        assert!(!result.generated_rust_code.contains("#[no_mangle]"));
+        assert!(result.generated_rust_code.contains("print!(\"{}\","));
+        assert!(result.generated_rust_code.contains("fn main()"));
+        assert!(result.generated_rust_code.contains("unsafe { main_0() }"));
     }
 
     #[test]
