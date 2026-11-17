@@ -152,8 +152,7 @@ export const App: React.FC = () => {
     (
       codeToConvert: string,
       languageToConvert: SourceLanguage,
-      styleOverride?: RustOutputStyle,
-      forceOverwrite: boolean = false
+      styleOverride?: RustOutputStyle
     ) => {
       if (conversionAbortRef.current) {
         conversionAbortRef.current.abort();
@@ -189,20 +188,14 @@ export const App: React.FC = () => {
               ? (conversionResult.faithfulRustCode ?? conversionResult.generatedRustCode)
               : (conversionResult.idiomaticRustCode ?? conversionResult.generatedRustCode);
 
-          if (forceOverwrite || !isRustManuallyEdited) {
-            setLastGeneratedRustCode(targetGenerated);
-            setRustCode(targetGenerated);
-            setIsRustManuallyEdited(false);
-          } else {
-            const mergeResult = mergeIncrementalRustEdits(
-              lastGeneratedRustCode,
-              targetGenerated,
-              rustCode,
-              true
-            );
-            setLastGeneratedRustCode(targetGenerated);
-            setRustCode(mergeResult.mergedRustCode);
-          }
+          const mergeResult = mergeIncrementalRustEdits(
+            lastGeneratedRustCode,
+            targetGenerated,
+            rustCode,
+            isRustManuallyEdited
+          );
+          setLastGeneratedRustCode(targetGenerated);
+          setRustCode(mergeResult.mergedRustCode);
         })
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError") {
@@ -217,10 +210,9 @@ export const App: React.FC = () => {
     (nextStyle: RustOutputStyle) => {
       setOutputStyle(nextStyle);
       outputStyleRef.current = nextStyle;
-      setIsRustManuallyEdited(false);
       const cachedTarget =
         nextStyle === "faithful" ? faithfulRustCode : idiomaticRustCode;
-      if (cachedTarget) {
+      if (!isRustManuallyEdited && cachedTarget) {
         setLastGeneratedRustCode(cachedTarget);
         setRustCode(cachedTarget);
       }
@@ -228,11 +220,12 @@ export const App: React.FC = () => {
         conversionMode === "live"
           ? buildLineByLineConversionInput(sourceCode, activeSourceLineNumber)
           : sourceCode;
-      runConversion(inputForMode, sourceLanguage, nextStyle, true);
+      runConversion(inputForMode, sourceLanguage, nextStyle);
     },
     [
       faithfulRustCode,
       idiomaticRustCode,
+      isRustManuallyEdited,
       conversionMode,
       sourceCode,
       activeSourceLineNumber,
@@ -280,8 +273,7 @@ export const App: React.FC = () => {
       window.clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
-    setIsRustManuallyEdited(false);
-    runConversion(sourceCode, sourceLanguage, outputStyleRef.current, true);
+    runConversion(sourceCode, sourceLanguage);
   }, [runConversion, sourceCode, sourceLanguage]);
 
   const handleRustEditorChange = useCallback(

@@ -491,39 +491,144 @@ fn remove_redundant_casts_and_parens(code: &str) -> (String, usize, bool) {
     (updated, cast_count, changed)
 }
 
+fn strip_comments_and_strings_on_line(line: &str, in_block_comment: &mut bool) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut output = String::with_capacity(line.len());
+    let mut i = 0;
+
+    while i < chars.len() {
+        if *in_block_comment {
+            if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                *in_block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        if chars[i] == '/' && i + 1 < chars.len() {
+            if chars[i + 1] == '/' {
+                break;
+            }
+            if chars[i + 1] == '*' {
+                *in_block_comment = true;
+                i += 2;
+                continue;
+            }
+        }
+
+        if chars[i] == '"' {
+            output.push(' ');
+            i += 1;
+            let mut escaped = false;
+            while i < chars.len() {
+                if escaped {
+                    escaped = false;
+                } else if chars[i] == '\\' {
+                    escaped = true;
+                } else if chars[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if chars[i] == '\'' {
+            if i + 3 < chars.len() && chars[i + 1] == '\\' && chars[i + 3] == '\'' {
+                output.push(' ');
+                i += 4;
+                continue;
+            }
+            if i + 2 < chars.len() && chars[i + 1] != '\'' && chars[i + 2] == '\'' {
+                output.push(' ');
+                i += 3;
+                continue;
+            }
+        }
+
+        output.push(chars[i]);
+        i += 1;
+    }
+
+    output
+}
+
+fn recompute_code_only_lines(lines: &[String]) -> Vec<String> {
+    let mut in_block_comment = false;
+    lines
+        .iter()
+        .map(|line| strip_comments_and_strings_on_line(line, &mut in_block_comment))
+        .collect()
+}
+
+fn has_balanced_parens(expr: &str) -> bool {
+    let mut balance = 0isize;
+    for ch in expr.chars() {
+        if ch == '(' {
+            balance += 1;
+        } else if ch == ')' {
+            balance -= 1;
+            if balance < 0 {
+                return false;
+            }
+        }
+    }
+    balance == 0
+}
+
+fn has_inner_declaration_statement(code_lines: &[String]) -> bool {
+    const DECL_PREFIXES: &[&str] = &[
+        "let ",
+        "fn ",
+        "struct ",
+        "enum ",
+        "type ",
+        "const ",
+        "static ",
+        "mod ",
+        "use ",
+        "macro_rules!",
+    ];
+    code_lines.iter().any(|line| {
+        let trimmed = line.trim_start();
+        DECL_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix))
+    })
+}
+
 fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
     let original = code.to_string();
     let mut lines: Vec<String> = code.lines().map(|l| l.to_string()).collect();
 
     loop {
+        let code_only_lines = recompute_code_only_lines(&lines);
         let mut unwrapped = false;
         let mut i = 0;
         while i < lines.len() {
-            if lines[i].trim() == "if true {" {
+            if code_only_lines[i].trim() == "if true {" {
                 let mut depth = 1isize;
                 let mut close_idx = None;
-                for (j, line) in lines.iter().enumerate().skip(i + 1) {
-                    for ch in line.chars() {
+                for (j, code_line) in code_only_lines.iter().enumerate().skip(i + 1) {
+                    for ch in code_line.chars() {
                         if ch == '{' {
                             depth += 1;
                         } else if ch == '}' {
                             depth -= 1;
                         }
                     }
-                    if depth == 0 && line.trim() == "}" {
+                    if depth == 0 && code_line.trim() == "}" {
                         close_idx = Some(j);
                         break;
                     }
                 }
                 if let Some(j) = close_idx {
-                    let has_else_after = lines
+                    let has_else_after = code_only_lines
                         .get(j + 1)
                         .is_some_and(|next| next.trim().starts_with("else"));
                     if !has_else_after {
-                        let has_inner_let = lines[(i + 1)..j]
-                            .iter()
-                            .any(|l| l.trim_start().starts_with("let "));
-                        if has_inner_let {
+                        if has_inner_declaration_statement(&code_only_lines[(i + 1)..j]) {
                             let indent: String = lines[i]
                                 .chars()
                                 .take_while(|c| c.is_whitespace())
@@ -552,13 +657,14 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
     let deref_init_line_re =
         Regex::new(r"^\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);\s*$").unwrap();
 
+    let mut code_only_lines = recompute_code_only_lines(&lines);
     let mut idx = 0;
     while idx < lines.len() {
-        if let Some(decl_cap) = box_default_line_re.captures(&lines[idx]) {
+        if let Some(decl_cap) = box_default_line_re.captures(&code_only_lines[idx]) {
             let var_name = decl_cap.get(1).unwrap().as_str();
             let box_type = decl_cap.get(2).unwrap().as_str().trim();
             let mut next_idx = idx + 1;
-            while next_idx < lines.len() && lines[next_idx].trim().is_empty() {
+            while next_idx < lines.len() && code_only_lines[next_idx].trim().is_empty() {
                 next_idx += 1;
             }
             if next_idx < lines.len() {
@@ -567,7 +673,7 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
                         let expr = assign_cap.get(2).unwrap().as_str().trim();
                         let self_ref_re =
                             Regex::new(&format!(r"\b{}\b", regex::escape(var_name))).unwrap();
-                        if !self_ref_re.is_match(expr) {
+                        if !self_ref_re.is_match(expr) && has_balanced_parens(expr) {
                             let indent: String = lines[idx]
                                 .chars()
                                 .take_while(|c| c.is_whitespace())
@@ -577,6 +683,7 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
                                 indent, var_name, box_type, expr
                             );
                             lines.remove(next_idx);
+                            code_only_lines = recompute_code_only_lines(&lines);
                         }
                     }
                 }
@@ -585,12 +692,16 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
         idx += 1;
     }
 
-    let drop_line_re = Regex::new(r"^\s*drop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$").unwrap();
-    if let Some(main_idx) = lines.iter().position(|l| l.trim() == "fn main() {") {
+    let drop_line_re =
+        Regex::new(r"^\s*drop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$").unwrap();
+    if let Some(main_idx) = code_only_lines
+        .iter()
+        .position(|l| l.trim() == "fn main() {")
+    {
         let mut depth = 0isize;
         let mut main_end_idx = None;
-        for (k, line) in lines.iter().enumerate().skip(main_idx) {
-            for ch in line.chars() {
+        for (k, code_line) in code_only_lines.iter().enumerate().skip(main_idx) {
+            for ch in code_line.chars() {
                 if ch == '{' {
                     depth += 1;
                 } else if ch == '}' {
@@ -604,10 +715,10 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
         }
         if let Some(end_k) = main_end_idx {
             let mut prev_k = end_k.saturating_sub(1);
-            while prev_k > main_idx && lines[prev_k].trim().is_empty() {
+            while prev_k > main_idx && code_only_lines[prev_k].trim().is_empty() {
                 prev_k -= 1;
             }
-            if prev_k > main_idx && drop_line_re.is_match(&lines[prev_k]) {
+            if prev_k > main_idx && drop_line_re.is_match(&code_only_lines[prev_k]) {
                 lines.remove(prev_k);
             }
         }
@@ -776,8 +887,10 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
         return (faithful_rust.to_string(), summary);
     }
 
+    let raw_lines: Vec<String> = faithful_rust.lines().map(|l| l.to_string()).collect();
+    let code_only = recompute_code_only_lines(&raw_lines).join("\n");
     if faithful_rust.contains("// [Preprocessor] #")
-        || faithful_rust.matches('{').count() != faithful_rust.matches('}').count()
+        || code_only.matches('{').count() != code_only.matches('}').count()
     {
         summary.compiler_verified = false;
         summary.verification_error = Some(

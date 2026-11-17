@@ -974,4 +974,23 @@ int main() {
         assert!(!idiomatic.generated_rust_code.contains("if true"));
         assert!(idiomatic.generated_rust_code.contains("{\n        let x: i32 = 2;"));
     }
+
+    #[test]
+    fn idiomatic_simplifier_ignores_braces_in_comments_and_strings() {
+        let faithful = r#"fn main() {
+    let flag = true;
+    if true {
+        if flag {
+            println!("}}");
+            // }
+        }
+        println!("after");
+    }
+}"#;
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified);
+        assert!(!idiomatic.contains("if true"));
+        assert!(idiomatic.contains("println!(\"after\");"));
+        assert!(idiomatic.contains("println!(\"}}\");"));
+    }
 }
