@@ -10,7 +10,19 @@ use crate::models::{
 use diagnostics::{
     analyze_base_source_diagnostics, analyze_source_diagnostics, detect_unsupported_constructs,
 };
-pub use explanations::generate_conversion_explanations;
+pub use explanations::{
+    format_explanations_as_rust_comments, generate_conversion_explanations,
+};
+
+fn append_explanation_comments(code: String, notes_comment: &str) -> String {
+    if notes_comment.is_empty() {
+        code
+    } else if code.trim().is_empty() {
+        notes_comment.to_string()
+    } else {
+        format!("{}\n\n{}", code.trim_end(), notes_comment)
+    }
+}
 use line_translator::{translate_single_line, TranslatorState};
 use postprocessor::postprocess_rust_code;
 use std::fs;
@@ -229,10 +241,10 @@ pub fn convert_source_to_rust_with_style(
 
     if let Some(binary_path) = detect_external_transpiler_binary(source_language) {
         match try_invoke_external_backbone_engine(source_code, source_language, &binary_path) {
-            Ok(faithful_rust_code) => {
+            Ok(mut faithful_rust_code) => {
                 let engine_label = format!("{} CLI ({})", cli_name, binary_path);
                 let diagnostics = analyze_base_source_diagnostics(&source_lines);
-                let (idiomatic_rust_code, post_processing) =
+                let (mut idiomatic_rust_code, post_processing) =
                     postprocess_rust_code(&faithful_rust_code);
                 let explanations = generate_conversion_explanations(
                     source_code,
@@ -244,6 +256,13 @@ pub fn convert_source_to_rust_with_style(
                     false,
                     &engine_label,
                 );
+                if post_processing.compiler_verified {
+                    let notes_comment = format_explanations_as_rust_comments(&explanations);
+                    faithful_rust_code =
+                        append_explanation_comments(faithful_rust_code, &notes_comment);
+                    idiomatic_rust_code =
+                        append_explanation_comments(idiomatic_rust_code, &notes_comment);
+                }
                 let generated_rust_code = match output_style {
                     RustOutputStyle::Faithful => faithful_rust_code.clone(),
                     RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
@@ -352,8 +371,8 @@ pub fn convert_source_to_rust_with_style(
         });
     }
 
-    let faithful_rust_code = final_rust_lines.join("\n");
-    let (idiomatic_rust_code, post_processing) = postprocess_rust_code(&faithful_rust_code);
+    let mut faithful_rust_code = final_rust_lines.join("\n");
+    let (mut idiomatic_rust_code, post_processing) = postprocess_rust_code(&faithful_rust_code);
 
     if !post_processing.compiler_verified
         && !source_code.trim().is_empty()
@@ -389,6 +408,11 @@ pub fn convert_source_to_rust_with_style(
         true,
         &transpiler_engine,
     );
+    if post_processing.compiler_verified {
+        let notes_comment = format_explanations_as_rust_comments(&explanations);
+        faithful_rust_code = append_explanation_comments(faithful_rust_code, &notes_comment);
+        idiomatic_rust_code = append_explanation_comments(idiomatic_rust_code, &notes_comment);
+    }
     let generated_rust_code = match output_style {
         RustOutputStyle::Faithful => faithful_rust_code.clone(),
         RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
@@ -854,5 +878,42 @@ int main() {
         assert!(vec_expl.ownership_and_iteration.contains("&vec"));
         assert!(vec_expl.ownership_and_iteration.contains("&mut vec"));
         assert!(vec_expl.ownership_and_iteration.contains(".into_iter()"));
+        assert!(result
+            .generated_rust_code
+            .contains("// --- Rust Translation Notes"));
+        assert!(result.generated_rust_code.contains("RAII Drop"));
+        assert!(result.generated_rust_code.contains("&vec"));
+        assert!(result.generated_rust_code.contains("&mut vec"));
+    }
+
+    #[test]
+    fn converts_c_malloc_int_pointer_and_null_check_and_executes() {
+        let c_source = r#"#include <stdlib.h>
+#include <stdio.h>
+
+int main(){
+int *p = malloc(sizeof(int));
+if (p != NULL) {
+    *p = 100;
+    printf("VALUE of p is %d\n",*p);
+    free(p);
+}
+  return 0;
+}"#;
+        let result = convert_source_to_rust(c_source, &SourceLanguage::C);
+        assert!(
+            result
+                .generated_rust_code
+                .contains("let mut p: Box<i32> = Box::new(Default::default());"),
+            "Expected Box<i32> declaration, got:\n{}",
+            result.generated_rust_code
+        );
+        assert!(!result.generated_rust_code.contains("Box<int>"));
+        assert!(!result.generated_rust_code.contains("p != None"));
+        assert!(result.post_processing.compiler_verified);
+        assert!(result
+            .generated_rust_code
+            .contains("// --- Rust Translation Notes"));
+        assert!(result.generated_rust_code.contains("Box<i32>"));
     }
 }

@@ -380,7 +380,7 @@ fn replace_c_types_and_unsafe_wrappers(code: &str) -> (String, usize, bool) {
     )
     .unwrap();
     updated = box_default_regex
-        .replace_all(&updated, "let mut $1 = Box::new($2::default());")
+        .replace_all(&updated, "let mut $1: Box<$2> = Box::new(Default::default());")
         .to_string();
 
     let box_struct_regex = Regex::new(

@@ -201,16 +201,56 @@ int main() {
 }`);
 
     await expect(page.getByTestId("rust-editor-pane")).toContainText("Vec<i32>");
-    await expect(page.getByTestId("output-explanation-summary")).toContainText("std::vector<int>");
-    await expect(page.getByTestId("output-explanation-summary")).toContainText("Vec<i32>");
-    await expect(page.getByTestId("output-explanation-summary")).toContainText("&vec");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "// --- Rust Translation Notes"
+    );
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("std::vector<int> -> Vec<i32>");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("RAII Drop");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("&vec");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("&mut vec");
+    await expect(page.getByTestId("explanations-tab")).toHaveCount(0);
+    await expect(page.getByTestId("output-explanation-summary")).toHaveCount(0);
+  });
 
-    await page.getByTestId("explanations-tab").click();
-    const explanationsList = page.getByTestId("explanations-list");
-    await expect(explanationsList).toContainText("std::vector<int>");
-    await expect(explanationsList).toContainText("Vec<i32>");
-    await expect(explanationsList).toContainText("RAII Drop");
-    await expect(explanationsList).toContainText("&mut vec");
+  test("converts C malloc(sizeof(int)) and NULL check to Box<i32> and executes", async ({
+    page
+  }) => {
+    await page.goto("/");
+
+    await page.getByTestId("select-c-button").click();
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill(`#include <stdlib.h>
+#include <stdio.h>
+
+int main(){
+int *p = malloc(sizeof(int));
+if (p != NULL) {
+    *p = 100;
+    printf("VALUE of p is %d\\n",*p);
+    free(p);
+}
+  return 0;
+}`);
+
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "let mut p: Box<i32> = Box::new(Default::default());"
+    );
+    await expect(page.getByTestId("rust-editor-pane")).not.toContainText("Box<int>");
+    await expect(page.getByTestId("rust-editor-pane")).not.toContainText("p != None");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "// --- Rust Translation Notes"
+    );
+
+    await page.getByTestId("provider-select").selectOption("local");
+    await page.getByTestId("run-rust-button").click();
+    await expect(page.getByTestId("program-output")).toContainText("VALUE of p is 100", {
+      timeout: 15000
+    });
   });
 
   test("honestly labels regex fallback engine and flags unsupported C++ exceptions", async ({

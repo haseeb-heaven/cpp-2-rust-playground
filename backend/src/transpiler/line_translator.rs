@@ -118,7 +118,7 @@ static MALLOC_FLEX_ARRAY_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)?malloc\s*\(\s*sizeof\s*\([^)]+\)\s*\+\s*([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*sizeof\s*\([^)]+\)\s*\)\s*;\s*$"#).unwrap()
 });
 static MALLOC_STRUCT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\*\s*\)\s*)?malloc\s*\(.+\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^(?:struct\s+)?([A-Za-z_][A-Za-z0-9_\s]*?)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\(\s*[^)]*\*\s*\)\s*)?(?:malloc|calloc)\s*\(.+\)\s*;\s*$"#).unwrap()
 });
 static DEFINE_GENERIC_MACRO_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*_Generic\s*\(\s*\(?\s*[A-Za-z_][A-Za-z0-9_]*\s*\)?\s*,\s*(.+)\)\s*$"#).unwrap()
@@ -935,6 +935,35 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         replaced = bit_zero_regex
             .replace_all(&replaced, "(($1) == 0)")
             .to_string();
+        for box_var in &state.box_pointer_variables {
+            let escaped = regex::escape(box_var);
+            let ne_right_re = Regex::new(&format!(
+                r"(^|[^*.\w]){}\s*!=\s*(?:NULL|nullptr|0)\b",
+                escaped
+            ))
+            .unwrap();
+            replaced = ne_right_re.replace_all(&replaced, "${1}true").to_string();
+            let ne_left_re = Regex::new(&format!(
+                r"(^|[^*.\w])(?:NULL|nullptr|0)\s*!=\s*{}\b",
+                escaped
+            ))
+            .unwrap();
+            replaced = ne_left_re.replace_all(&replaced, "${1}true").to_string();
+            let eq_right_re = Regex::new(&format!(
+                r"(^|[^*.\w]){}\s*==\s*(?:NULL|nullptr|0)\b",
+                escaped
+            ))
+            .unwrap();
+            replaced = eq_right_re.replace_all(&replaced, "${1}false").to_string();
+            let eq_left_re = Regex::new(&format!(
+                r"(^|[^*.\w])(?:NULL|nullptr|0)\s*==\s*{}\b",
+                escaped
+            ))
+            .unwrap();
+            replaced = eq_left_re.replace_all(&replaced, "${1}false").to_string();
+            let not_var_re = Regex::new(&format!(r"(^|[^*.\w])!\s*{}\b", escaped)).unwrap();
+            replaced = not_var_re.replace_all(&replaced, "${1}false").to_string();
+        }
         for (from, to) in replacements {
             replaced = replaced.replace(from, to);
         }
@@ -2669,16 +2698,17 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
     }
 
     if let Some(captures) = MALLOC_STRUCT_REGEX.captures(trimmed) {
-        let struct_type = captures.get(1).unwrap().as_str();
+        let raw_type = captures.get(1).unwrap().as_str().trim();
         let variable_name = captures.get(2).unwrap().as_str();
-        state.register_variable_type(variable_name, struct_type);
+        let rust_type = map_cpp_type_to_rust(raw_type, state);
+        state.register_variable_type(variable_name, &rust_type);
         if state.linked_list_head_var.is_some() {
-            return format!("let mut {}: {} = Default::default();", variable_name, struct_type);
+            return format!("let mut {}: {} = Default::default();", variable_name, rust_type);
         }
         state.box_pointer_variables.insert(variable_name.to_string());
         return format!(
             "let mut {}: Box<{}> = Box::new(Default::default());",
-            variable_name, struct_type
+            variable_name, rust_type
         );
     }
 
@@ -2771,7 +2801,12 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
     }
 
     if let Some(captures) = SINGLE_LINE_IF_REGEX.captures(trimmed) {
-        let condition = translate_expression_with_state(captures.get(1).unwrap().as_str(), state);
+        let raw_cond = captures.get(1).unwrap().as_str().trim();
+        let condition = if state.box_pointer_variables.contains(raw_cond) {
+            "true".to_string()
+        } else {
+            translate_expression_with_state(raw_cond, state)
+        };
         let inline_stmt = translate_statement_line(captures.get(2).unwrap().as_str(), state);
         return format!("if {} {{ {} }}", condition, inline_stmt);
     }
@@ -2808,7 +2843,12 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
     }
 
     if let Some(captures) = IF_REGEX.captures(trimmed) {
-        let condition = translate_expression_with_state(captures.get(1).unwrap().as_str(), state);
+        let raw_cond = captures.get(1).unwrap().as_str().trim();
+        let condition = if state.box_pointer_variables.contains(raw_cond) {
+            "true".to_string()
+        } else {
+            translate_expression_with_state(raw_cond, state)
+        };
         return format!("if {} {{", condition);
     }
 

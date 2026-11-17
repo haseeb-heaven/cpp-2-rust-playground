@@ -368,7 +368,6 @@ body,
 
 .output-pre {
   flex: 1;
-  min-height: 64px;
   margin: 0;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
@@ -378,105 +377,6 @@ body,
   font-size: 12px;
   overflow: auto;
   white-space: pre-wrap;
-}
-
-.output-explanation-summary {
-  margin-top: 6px;
-  max-height: 88px;
-  overflow: auto;
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-primary);
-  font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.output-explanation-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.inline-link-button {
-  background: transparent;
-  border: none;
-  padding: 0;
-  color: var(--accent-blue);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.inline-link-button:hover {
-  text-decoration: underline;
-}
-
-.output-explanation-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  line-height: 1.4;
-}
-
-.output-explanation-text {
-  color: var(--text-muted);
-}
-
-.explanations-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.explanation-item {
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  border-left: 3px solid var(--accent-color);
-  background: var(--bg-primary);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 12px;
-}
-
-.explanation-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.explanation-title {
-  color: var(--text-primary);
-  font-size: 12px;
-}
-
-.explanation-mapping-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(59, 130, 246, 0.14);
-  color: var(--accent-blue);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.explanation-section {
-  line-height: 1.45;
-  color: var(--text-muted);
-}
-
-.explanation-section strong {
-  color: var(--text-primary);
 }
 
 .diagnostics-list {

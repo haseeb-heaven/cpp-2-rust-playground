@@ -46,7 +46,8 @@ describe("App component", () => {
           return Promise.resolve(
             new Response(
               JSON.stringify({
-                generatedRustCode: "fn main() {\n    println!(\"ok\");\n}",
+                generatedRustCode:
+                  "fn main() {\n    println!(\"ok\");\n}\n\n// --- Rust Translation Notes ---\n// [Dynamic Array] std::vector<int> -> Vec<i32>",
                 lineMappings: [],
                 diagnostics: [],
                 requiredImports: [],
@@ -150,12 +151,10 @@ describe("App component", () => {
     fireEvent.click(convertButton);
     await waitFor(() => {
       expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("println!(\"ok\")");
+      expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("Vec<i32>");
       expect(screen.getByTestId("transpiler-engine-badge")).toHaveTextContent("Regex Fallback");
-      expect(screen.getByTestId("output-explanation-summary")).toHaveTextContent("Vec<i32>");
     });
-
-    fireEvent.click(screen.getByTestId("explanations-tab"));
-    expect(screen.getByTestId("explanations-list")).toHaveTextContent("&vec");
-    expect(screen.getByTestId("explanations-list")).toHaveTextContent("&mut vec");
+    expect(screen.queryByTestId("explanations-tab")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("output-explanation-summary")).not.toBeInTheDocument();
   });
 });

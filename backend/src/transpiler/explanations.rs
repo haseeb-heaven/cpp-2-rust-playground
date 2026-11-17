@@ -41,6 +41,12 @@ static VLA_DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\](?:\[\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\])?\s*;")
         .unwrap()
 });
+static MALLOC_DECL_TYPE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\b(?:struct\s+)?([A-Za-z_][A-Za-z0-9_\s]*?)\s*\*\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:\([^)]*\*\)\s*)?(?:malloc|calloc)\s*\(",
+    )
+    .unwrap()
+});
 
 fn map_cpp_element_to_rust(raw_type: &str) -> String {
     let normalized = raw_type
@@ -194,16 +200,33 @@ fn push_memory_and_pointer_explanations(
         || source_code.contains("free(")
         || rust_code.contains("Box::new");
     if has_heap_alloc && !FLEXIBLE_ARRAY_REGEX.is_match(source_code) {
+        let (cpp_pattern, rust_equivalent) = if source_code.contains("unique_ptr") {
+            ("std::unique_ptr<T>".to_string(), "Box<T>".to_string())
+        } else if let Some(cap) = MALLOC_DECL_TYPE_REGEX.captures(source_code) {
+            let elem_raw = cap.get(1).unwrap().as_str().trim();
+            let rust_elem = map_cpp_element_to_rust(elem_raw);
+            (
+                format!("{}* = malloc(sizeof({})) / free()", elem_raw, elem_raw),
+                format!("Box<{}>", rust_elem),
+            )
+        } else {
+            (
+                "T* = malloc(sizeof(T)) / free()".to_string(),
+                "Box<T>".to_string(),
+            )
+        };
         out.push(ConversionExplanation {
             construct: "Single-Owner Heap Allocation (malloc / unique_ptr → Box)".to_string(),
-            cpp_pattern: if source_code.contains("unique_ptr") {
-                "std::unique_ptr<T>".to_string()
-            } else {
-                "T* = malloc(sizeof(T)) / free()".to_string()
-            },
-            rust_equivalent: "Box<T>".to_string(),
-            why_chosen: "Box<T> provides sole heap ownership with zero runtime reference-counting overhead, replacing manual malloc/free calls that risk leaks, double-frees, or null pointer dereferences.".to_string(),
-            ownership_and_iteration: "Ownership: Only one binding owns a Box<T> at a time; assigning or passing it moves ownership and automatically calls Drop::drop when the owner goes out of scope (so free() is never needed). Borrow inner fields via &T or &mut T.".to_string(),
+            cpp_pattern,
+            rust_equivalent: rust_equivalent.clone(),
+            why_chosen: format!(
+                "{} provides sole non-null heap ownership with zero runtime reference-counting overhead, replacing manual malloc/free calls and NULL pointer checks.",
+                rust_equivalent
+            ),
+            ownership_and_iteration: format!(
+                "Ownership: Only one binding owns a {} at a time; assigning or passing it moves ownership and automatically frees heap memory on scope exit or drop() (eliminating leaks and double-frees). Borrow the inner value via & or &mut.",
+                rust_equivalent
+            ),
         });
     }
 
@@ -417,4 +440,27 @@ pub fn generate_conversion_explanations(
     );
 
     explanations
+}
+
+pub fn format_explanations_as_rust_comments(explanations: &[ConversionExplanation]) -> String {
+    let notes: Vec<&ConversionExplanation> = explanations
+        .iter()
+        .filter(|item| !item.construct.starts_with("Output Mode"))
+        .collect();
+    if notes.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = vec![
+        "// --- Rust Translation Notes (Why Chosen, Ownership & Iteration) ---".to_string(),
+    ];
+    for item in notes {
+        lines.push(format!(
+            "// [{}] {} -> {}",
+            item.construct, item.cpp_pattern, item.rust_equivalent
+        ));
+        lines.push(format!("//   Why: {}", item.why_chosen));
+        lines.push(format!("//   {}", item.ownership_and_iteration));
+    }
+    lines.join("\n")
 }

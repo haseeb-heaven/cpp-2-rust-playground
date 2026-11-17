@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import { AlertTriangle, BookOpen, CheckCircle2, Clock, Cpu, Terminal, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Cpu, Terminal, XCircle } from "lucide-react";
 import type {
   ConversionDiagnostic,
-  ConversionExplanation,
   ExecutionProvider,
   ExecutionResponse,
   LineMapping
@@ -16,12 +15,11 @@ interface OutputConsoleProps {
   lastExecutedLabel: string | null;
   isExecuting: boolean;
   conversionDiagnostics: ConversionDiagnostic[];
-  conversionExplanations?: ConversionExplanation[];
   lineMappings: LineMapping[];
   onSelectLineMapping: (sourceLine: number, rustStartLine: number, rustEndLine: number) => void;
 }
 
-type ConsoleTab = "output" | "explanations" | "diagnostics" | "mappings";
+type ConsoleTab = "output" | "diagnostics" | "mappings";
 
 export const OutputConsole: React.FC<OutputConsoleProps> = ({
   stdinInput,
@@ -31,7 +29,6 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
   lastExecutedLabel,
   isExecuting,
   conversionDiagnostics,
-  conversionExplanations = [],
   lineMappings,
   onSelectLineMapping
 }) => {
@@ -52,16 +49,6 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
         >
           <Terminal size={14} />
           <span>Output &amp; Stdin</span>
-        </button>
-
-        <button
-          type="button"
-          className={`console-tab ${activeTab === "explanations" ? "active" : ""}`}
-          onClick={() => setActiveTab("explanations")}
-          data-testid="explanations-tab"
-        >
-          <BookOpen size={14} />
-          <span>Why Rust? ({conversionExplanations.length})</span>
         </button>
 
         <button
@@ -151,63 +138,7 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
                       : executionResult.output || "(Program exited with no output)"
                     : "Click Compile or Run to execute C, C++, or Rust code."}
               </pre>
-              {conversionExplanations.length > 0 && (
-                <div
-                  className="output-explanation-summary"
-                  data-testid="output-explanation-summary"
-                >
-                  <div className="output-explanation-header">
-                    <span className="panel-label">
-                      Why This Rust Choice (Ownership &amp; Iteration)
-                    </span>
-                    <button
-                      type="button"
-                      className="inline-link-button"
-                      onClick={() => setActiveTab("explanations")}
-                    >
-                      View all ({conversionExplanations.length})
-                    </button>
-                  </div>
-                  {conversionExplanations.slice(0, 2).map((item, idx) => (
-                    <div key={idx} className="output-explanation-row">
-                      <span className="explanation-mapping-badge">
-                        <code>{item.cppPattern}</code> → <code>{item.rustEquivalent}</code>
-                      </span>
-                      <span className="output-explanation-text">
-                        {item.whyChosen} {item.ownershipAndIteration}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
-          </div>
-        )}
-
-        {activeTab === "explanations" && (
-          <div className="explanations-list" data-testid="explanations-list">
-            {conversionExplanations.length === 0 ? (
-              <div className="empty-state">
-                Convert C or C++ code to see why each Rust equivalent was chosen and how ownership &amp; iteration differ.
-              </div>
-            ) : (
-              conversionExplanations.map((item, index) => (
-                <article key={index} className="explanation-item">
-                  <div className="explanation-header">
-                    <strong className="explanation-title">{item.construct}</strong>
-                    <span className="explanation-mapping-badge">
-                      <code>{item.cppPattern}</code> → <code>{item.rustEquivalent}</code>
-                    </span>
-                  </div>
-                  <div className="explanation-section">
-                    <strong>Why Chosen:</strong> {item.whyChosen}
-                  </div>
-                  <div className="explanation-section">
-                    <strong>Ownership &amp; Iteration:</strong> {item.ownershipAndIteration}
-                  </div>
-                </article>
-              ))
-            )}
           </div>
         )}
 
