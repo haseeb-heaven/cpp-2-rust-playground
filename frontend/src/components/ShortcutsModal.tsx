@@ -9,7 +9,6 @@ interface ShortcutsModalProps {
 const SHORTCUTS_LIST = [
   { keys: "Ctrl / Cmd + Enter", description: "Run Rust code" },
   { keys: "Ctrl / Cmd + Shift + Enter", description: "Run C/C++ code" },
-  { keys: "Ctrl / Cmd + B", description: "Compile Rust code" },
   { keys: "Ctrl / Cmd + S", description: "Save workspace to local storage" },
   { keys: "Ctrl / Cmd + \\", description: "Swap left and right editor panels" },
   { keys: "Ctrl / Cmd + D", description: "Toggle Diff View" }

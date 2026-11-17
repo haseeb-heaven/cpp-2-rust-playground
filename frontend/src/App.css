@@ -153,16 +153,8 @@ body,
   cursor: not-allowed;
 }
 
-.compile-source {
-  background: #475569;
-}
-
 .run-source {
   background: var(--accent-blue);
-}
-
-.compile-rust {
-  background: #9a3412;
 }
 
 .run-rust {

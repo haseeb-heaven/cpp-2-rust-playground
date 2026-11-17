@@ -111,6 +111,10 @@ describe("App component", () => {
     expect(screen.getByTestId("source-editor-pane")).toBeInTheDocument();
     expect(screen.getByTestId("rust-editor-pane")).toBeInTheDocument();
     expect(screen.getByTestId("output-console")).toBeInTheDocument();
+    expect(screen.getByTestId("run-source-button")).toBeInTheDocument();
+    expect(screen.getByTestId("run-rust-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("compile-source-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("compile-rust-button")).not.toBeInTheDocument();
   });
 
   it("toggles Diff View and swaps panels", () => {

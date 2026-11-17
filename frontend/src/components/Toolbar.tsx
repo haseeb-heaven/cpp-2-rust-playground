@@ -5,7 +5,6 @@ import {
   Code2,
   Download,
   GitCompare,
-  Hammer,
   Keyboard,
   Play,
   RefreshCw,
@@ -301,16 +300,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         <button
           type="button"
-          className="exec-button compile-source"
-          disabled={isExecuting}
-          onClick={() => onExecute(sourceLanguage, "compile")}
-          data-testid="compile-source-button"
-        >
-          <Hammer size={14} />
-          <span>Compile {sourceLabel}</span>
-        </button>
-        <button
-          type="button"
           className="exec-button run-source"
           disabled={isExecuting}
           onClick={() => onExecute(sourceLanguage, "run")}
@@ -318,16 +307,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         >
           <Play size={14} />
           <span>Run {sourceLabel}</span>
-        </button>
-        <button
-          type="button"
-          className="exec-button compile-rust"
-          disabled={isExecuting}
-          onClick={() => onExecute("rust", "compile")}
-          data-testid="compile-rust-button"
-        >
-          <Hammer size={14} />
-          <span>Compile Rust</span>
         </button>
         <button
           type="button"

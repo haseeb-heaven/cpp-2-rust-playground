@@ -136,7 +136,7 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
                     ? executionResult.errorOutput
                       ? executionResult.errorOutput
                       : executionResult.output || "(Program exited with no output)"
-                    : "Click Compile or Run to execute C, C++, or Rust code."}
+                    : "Click Run to execute C, C++, or Rust code."}
               </pre>
             </div>
           </div>
