@@ -491,16 +491,85 @@ fn remove_redundant_casts_and_parens(code: &str) -> (String, usize, bool) {
     (updated, cast_count, changed)
 }
 
-fn strip_comments_and_strings_on_line(line: &str, in_block_comment: &mut bool) -> String {
+const TRIVIAL_PRIMITIVE_TYPES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32",
+    "f64", "bool", "char",
+];
+
+#[derive(Default)]
+struct LineScanState {
+    block_comment_depth: usize,
+    in_string: bool,
+    string_escaped: bool,
+    raw_string_hashes: Option<usize>,
+}
+
+fn match_raw_string_start(chars: &[char], i: usize) -> Option<usize> {
+    let prev_is_ident = i > 0 && (chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_');
+    if prev_is_ident {
+        return None;
+    }
+    let hash_start = if (chars[i] == 'b' || chars[i] == 'c')
+        && i + 1 < chars.len()
+        && chars[i + 1] == 'r'
+    {
+        i + 2
+    } else if chars[i] == 'r' {
+        i + 1
+    } else {
+        return None;
+    };
+    let mut k = hash_start;
+    let mut hashes = 0usize;
+    while k < chars.len() && chars[k] == '#' {
+        hashes += 1;
+        k += 1;
+    }
+    if k < chars.len() && chars[k] == '"' {
+        Some(hashes)
+    } else {
+        None
+    }
+}
+
+fn strip_comments_and_strings_on_line(line: &str, state: &mut LineScanState) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut output = String::with_capacity(line.len());
     let mut i = 0;
 
     while i < chars.len() {
-        if *in_block_comment {
-            if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
-                *in_block_comment = false;
+        if state.block_comment_depth > 0 {
+            if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+                state.block_comment_depth += 1;
                 i += 2;
+            } else if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                state.block_comment_depth -= 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        if state.in_string {
+            if state.string_escaped {
+                state.string_escaped = false;
+            } else if chars[i] == '\\' {
+                state.string_escaped = true;
+            } else if chars[i] == '"' {
+                state.in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if let Some(hashes) = state.raw_string_hashes {
+            if chars[i] == '"'
+                && i + 1 + hashes <= chars.len()
+                && (0..hashes).all(|k| chars[i + 1 + k] == '#')
+            {
+                state.raw_string_hashes = None;
+                i += 1 + hashes;
             } else {
                 i += 1;
             }
@@ -512,35 +581,36 @@ fn strip_comments_and_strings_on_line(line: &str, in_block_comment: &mut bool) -
                 break;
             }
             if chars[i + 1] == '*' {
-                *in_block_comment = true;
+                state.block_comment_depth += 1;
                 i += 2;
                 continue;
             }
         }
 
+        if let Some(hashes) = match_raw_string_start(&chars, i) {
+            output.push(' ');
+            let prefix_len = if chars[i] == 'r' { 1 } else { 2 };
+            state.raw_string_hashes = Some(hashes);
+            i += prefix_len + hashes + 1;
+            continue;
+        }
+
         if chars[i] == '"' {
             output.push(' ');
+            state.in_string = true;
+            state.string_escaped = false;
             i += 1;
-            let mut escaped = false;
-            while i < chars.len() {
-                if escaped {
-                    escaped = false;
-                } else if chars[i] == '\\' {
-                    escaped = true;
-                } else if chars[i] == '"' {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
             continue;
         }
 
         if chars[i] == '\'' {
-            if i + 3 < chars.len() && chars[i + 1] == '\\' && chars[i + 3] == '\'' {
-                output.push(' ');
-                i += 4;
-                continue;
+            if i + 2 < chars.len() && chars[i + 1] == '\\' {
+                let scan_limit = (i + 14).min(chars.len());
+                if let Some(end_rel) = chars[(i + 2)..scan_limit].iter().position(|&c| c == '\'') {
+                    output.push(' ');
+                    i += 2 + end_rel + 1;
+                    continue;
+                }
             }
             if i + 2 < chars.len() && chars[i + 1] != '\'' && chars[i + 2] == '\'' {
                 output.push(' ');
@@ -557,10 +627,10 @@ fn strip_comments_and_strings_on_line(line: &str, in_block_comment: &mut bool) -
 }
 
 fn recompute_code_only_lines(lines: &[String]) -> Vec<String> {
-    let mut in_block_comment = false;
+    let mut state = LineScanState::default();
     lines
         .iter()
-        .map(|line| strip_comments_and_strings_on_line(line, &mut in_block_comment))
+        .map(|line| strip_comments_and_strings_on_line(line, &mut state))
         .collect()
 }
 
@@ -663,27 +733,29 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
         if let Some(decl_cap) = box_default_line_re.captures(&code_only_lines[idx]) {
             let var_name = decl_cap.get(1).unwrap().as_str();
             let box_type = decl_cap.get(2).unwrap().as_str().trim();
-            let mut next_idx = idx + 1;
-            while next_idx < lines.len() && code_only_lines[next_idx].trim().is_empty() {
-                next_idx += 1;
-            }
-            if next_idx < lines.len() {
-                if let Some(assign_cap) = deref_init_line_re.captures(&lines[next_idx]) {
-                    if assign_cap.get(1).unwrap().as_str() == var_name {
-                        let expr = assign_cap.get(2).unwrap().as_str().trim();
-                        let self_ref_re =
-                            Regex::new(&format!(r"\b{}\b", regex::escape(var_name))).unwrap();
-                        if !self_ref_re.is_match(expr) && has_balanced_parens(expr) {
-                            let indent: String = lines[idx]
-                                .chars()
-                                .take_while(|c| c.is_whitespace())
-                                .collect();
-                            lines[idx] = format!(
-                                "{}let mut {}: Box<{}> = Box::new({});",
-                                indent, var_name, box_type, expr
-                            );
-                            lines.remove(next_idx);
-                            code_only_lines = recompute_code_only_lines(&lines);
+            if TRIVIAL_PRIMITIVE_TYPES.contains(&box_type) {
+                let mut next_idx = idx + 1;
+                while next_idx < lines.len() && code_only_lines[next_idx].trim().is_empty() {
+                    next_idx += 1;
+                }
+                if next_idx < lines.len() {
+                    if let Some(assign_cap) = deref_init_line_re.captures(&lines[next_idx]) {
+                        if assign_cap.get(1).unwrap().as_str() == var_name {
+                            let expr = assign_cap.get(2).unwrap().as_str().trim();
+                            let self_ref_re =
+                                Regex::new(&format!(r"\b{}\b", regex::escape(var_name))).unwrap();
+                            if !self_ref_re.is_match(expr) && has_balanced_parens(expr) {
+                                let indent: String = lines[idx]
+                                    .chars()
+                                    .take_while(|c| c.is_whitespace())
+                                    .collect();
+                                lines[idx] = format!(
+                                    "{}let mut {}: Box<{}> = Box::new({});",
+                                    indent, var_name, box_type, expr
+                                );
+                                lines.remove(next_idx);
+                                code_only_lines = recompute_code_only_lines(&lines);
+                            }
                         }
                     }
                 }
@@ -694,6 +766,12 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
 
     let drop_line_re =
         Regex::new(r"^\s*drop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$").unwrap();
+    let box_typed_decl_re = Regex::new(
+        r"^\s*let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*Box<([^>]+)>\s*=",
+    )
+    .unwrap();
+    let any_let_decl_re = Regex::new(r"^\s*let\s+").unwrap();
+
     if let Some(main_idx) = code_only_lines
         .iter()
         .position(|l| l.trim() == "fn main() {")
@@ -718,8 +796,26 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
             while prev_k > main_idx && code_only_lines[prev_k].trim().is_empty() {
                 prev_k -= 1;
             }
-            if prev_k > main_idx && drop_line_re.is_match(&code_only_lines[prev_k]) {
-                lines.remove(prev_k);
+            if prev_k > main_idx {
+                if let Some(drop_cap) = drop_line_re.captures(&code_only_lines[prev_k]) {
+                    let drop_var = drop_cap.get(1).unwrap().as_str();
+                    if let Some((decl_idx, box_type)) = ((main_idx + 1)..prev_k)
+                        .rev()
+                        .find_map(|pos| {
+                            box_typed_decl_re
+                                .captures(&code_only_lines[pos])
+                                .filter(|cap| cap.get(1).unwrap().as_str() == drop_var)
+                                .map(|cap| (pos, cap.get(2).unwrap().as_str().trim()))
+                        })
+                    {
+                        let is_last_declared = !code_only_lines[(decl_idx + 1)..prev_k]
+                            .iter()
+                            .any(|line| any_let_decl_re.is_match(line));
+                        if TRIVIAL_PRIMITIVE_TYPES.contains(&box_type) && is_last_declared {
+                            lines.remove(prev_k);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1068,4 +1164,29 @@ pub async fn verify_equivalence_against_source(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_multiline_and_raw_strings_custom_drops_and_drop_order() {
+        let code_with_multiline_string = "fn main() {\n    let s = \"hello\nif true {\nworld\n}\";\n    println!(\"{}\", s);\n}";
+        let (out1, changed1) = simplify_idiomatic_box_and_null_checks(code_with_multiline_string);
+        assert!(!changed1);
+        assert!(out1.contains("if true {\nworld\n}"));
+
+        let code_with_raw_string = "fn main() {\n    let r = r#\"line\nif true {\n\"foo\"\n}\"#;\n    println!(\"{}\", r);\n}";
+        let (out2, changed2) = simplify_idiomatic_box_and_null_checks(code_with_raw_string);
+        assert!(!changed2);
+        assert!(out2.contains("if true {\n\"foo\"\n}"));
+
+        let code_custom_box = "fn main() {\n    let mut s: Box<Custom> = Box::new(Default::default());\n    *s = Custom;\n    let mut a: Box<i32> = Box::new(Default::default());\n    *a = 1;\n    let b: Box<i32> = Box::new(2);\n    println!(\"{}\", *b);\n    drop(a);\n}";
+        let (out3, _) = simplify_idiomatic_box_and_null_checks(code_custom_box);
+        assert!(out3.contains("let mut s: Box<Custom> = Box::new(Default::default());"));
+        assert!(out3.contains("*s = Custom;"));
+        assert!(out3.contains("let mut a: Box<i32> = Box::new(1);"));
+        assert!(out3.contains("drop(a);"));
+    }
 }
