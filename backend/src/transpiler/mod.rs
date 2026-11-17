@@ -13,16 +13,6 @@ use diagnostics::{
 pub use explanations::{
     format_explanations_as_rust_comments, generate_conversion_explanations,
 };
-
-fn append_explanation_comments(code: String, notes_comment: &str) -> String {
-    if notes_comment.is_empty() {
-        code
-    } else if code.trim().is_empty() {
-        notes_comment.to_string()
-    } else {
-        format!("{}\n\n{}", code.trim_end(), notes_comment)
-    }
-}
 use line_translator::{translate_single_line, TranslatorState};
 use postprocessor::postprocess_rust_code;
 use std::fs;
@@ -40,12 +30,13 @@ pub(crate) struct TempEngineDirectory {
 impl TempEngineDirectory {
     pub(crate) fn create() -> std::io::Result<Self> {
         let id = ENGINE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let raw_path = std::env::temp_dir().join(format!(
             "cpp2rust_playground_engine_{}_{}",
             std::process::id(),
             id
         ));
-        fs::create_dir_all(&path)?;
+        fs::create_dir_all(&raw_path)?;
+        let path = fs::canonicalize(&raw_path).unwrap_or(raw_path);
         Ok(Self { path })
     }
 }
@@ -68,10 +59,19 @@ fn check_transpiler_binary(candidate: &str, check_flag: &str) -> bool {
         .is_ok()
 }
 
+pub fn workspace_root_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
 pub fn detect_external_transpiler_binary(source_language: &SourceLanguage) -> Option<String> {
+    let root = workspace_root_dir();
     let (env_key, check_flag, candidates) = match source_language {
         SourceLanguage::C => {
             let mut list = vec![
+                root.join(".tools/bin/c2rust").to_string_lossy().to_string(),
                 ".tools/bin/c2rust".to_string(),
                 "/opt/homebrew/bin/c2rust".to_string(),
                 "/usr/local/bin/c2rust".to_string(),
@@ -88,6 +88,12 @@ pub fn detect_external_transpiler_binary(source_language: &SourceLanguage) -> Op
             "CPP2RUST_BIN",
             "--help",
             vec![
+                root.join(".tools/cpp2rust/build/cpp2rust/cpp2rust")
+                    .to_string_lossy()
+                    .to_string(),
+                root.join(".tools/bin/cpp2rust")
+                    .to_string_lossy()
+                    .to_string(),
                 ".tools/cpp2rust/build/cpp2rust/cpp2rust".to_string(),
                 ".tools/bin/cpp2rust".to_string(),
                 "/opt/homebrew/bin/cpp2rust".to_string(),
@@ -109,6 +115,16 @@ pub fn detect_external_transpiler_binary(source_language: &SourceLanguage) -> Op
         .find(|candidate| check_transpiler_binary(candidate, check_flag))
 }
 
+fn macos_sdk_flag() -> String {
+    if cfg!(target_os = "macos") {
+        let sdk = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
+        if Path::new(sdk).exists() {
+            return format!(" -isysroot {}", sdk);
+        }
+    }
+    String::new()
+}
+
 pub fn try_invoke_external_backbone_engine(
     source_code: &str,
     source_language: &SourceLanguage,
@@ -121,13 +137,15 @@ pub fn try_invoke_external_backbone_engine(
         SourceLanguage::C => {
             let input_file = temp_dir.path.join("input.c");
             let compile_commands_file = temp_dir.path.join("compile_commands.json");
-            let output_file = temp_dir.path.join("input.rs");
+            let output_file_src = temp_dir.path.join("src").join("input.rs");
+            let output_file_flat = temp_dir.path.join("input.rs");
 
             fs::write(&input_file, source_code)
                 .map_err(|e| format!("failed to write input.c: {}", e))?;
+            let sdk_arg = macos_sdk_flag();
             let compile_commands = serde_json::json!([{
                 "directory": temp_dir.path.to_string_lossy(),
-                "command": format!("clang -std=c11 -c {}", input_file.to_string_lossy()),
+                "command": format!("clang -std=c11{} -c {}", sdk_arg, input_file.to_string_lossy()),
                 "file": input_file.to_string_lossy(),
             }]);
             let serialized = serde_json::to_string_pretty(&compile_commands)
@@ -153,7 +171,8 @@ pub fn try_invoke_external_backbone_engine(
                     stderr
                 });
             }
-            let generated = fs::read_to_string(&output_file)
+            let generated = fs::read_to_string(&output_file_src)
+                .or_else(|_| fs::read_to_string(&output_file_flat))
                 .map_err(|e| format!("missing generated input.rs: {}", e))?;
             if generated.trim().is_empty() {
                 Err("external c2rust CLI produced empty output".to_string())
@@ -168,9 +187,22 @@ pub fn try_invoke_external_backbone_engine(
             fs::write(&input_file, source_code)
                 .map_err(|e| format!("failed to write input.cpp: {}", e))?;
 
-            let output = Command::new(binary_path)
-                .arg(format!("--file={}", input_file.display()))
-                .arg(format!("-o={}", output_file.display()))
+            let mut cmd = Command::new(binary_path);
+            cmd.arg(format!("--file={}", input_file.display()))
+                .arg(format!("-o={}", output_file.display()));
+
+            let rules_dir = workspace_root_dir().join(".tools/cpp2rust/build/rules");
+            if rules_dir.is_dir() {
+                cmd.arg(format!("--rules={}", rules_dir.display()));
+            }
+
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            cmd.env(
+                "PATH",
+                format!("/opt/homebrew/bin:/usr/local/bin:{}", current_path),
+            );
+
+            let output = cmd
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()
@@ -239,80 +271,6 @@ pub fn convert_source_to_rust_with_style(
         cli_name
     ));
 
-    if let Some(binary_path) = detect_external_transpiler_binary(source_language) {
-        match try_invoke_external_backbone_engine(source_code, source_language, &binary_path) {
-            Ok(mut faithful_rust_code) => {
-                let engine_label = format!("{} CLI ({})", cli_name, binary_path);
-                let diagnostics = analyze_base_source_diagnostics(&source_lines);
-                let (mut idiomatic_rust_code, post_processing) =
-                    postprocess_rust_code(&faithful_rust_code);
-                let explanations = generate_conversion_explanations(
-                    source_code,
-                    source_language,
-                    &faithful_rust_code,
-                    &idiomatic_rust_code,
-                    &output_style,
-                    &post_processing,
-                    false,
-                    &engine_label,
-                );
-                if post_processing.compiler_verified {
-                    let notes_comment = format_explanations_as_rust_comments(&explanations);
-                    faithful_rust_code =
-                        append_explanation_comments(faithful_rust_code, &notes_comment);
-                    idiomatic_rust_code =
-                        append_explanation_comments(idiomatic_rust_code, &notes_comment);
-                }
-                let generated_rust_code = match output_style {
-                    RustOutputStyle::Faithful => faithful_rust_code.clone(),
-                    RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
-                };
-                let selected_line_count = generated_rust_code.lines().count().max(1);
-                let line_mappings = source_lines
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, line_text)| LineMapping {
-                        source_line: idx + 1,
-                        rust_start_line: (idx + 1).min(selected_line_count),
-                        rust_end_line: (idx + 1).min(selected_line_count),
-                        source_text: (*line_text).to_string(),
-                        rust_text: String::new(),
-                    })
-                    .collect();
-
-                return ConversionResponse {
-                    generated_rust_code,
-                    faithful_rust_code,
-                    idiomatic_rust_code,
-                    output_style,
-                    line_mappings,
-                    diagnostics,
-                    required_imports: Vec::new(),
-                    conversion_time_milliseconds: start_instant.elapsed().as_millis(),
-                    transpiler_engine: engine_label,
-                    used_fallback: false,
-                    fallback_reason: None,
-                    unsupported_constructs: Vec::new(),
-                    post_processing,
-                    explanations,
-                };
-            }
-            Err(err_msg) => {
-                fallback_reason = Some(format!(
-                    "External {} CLI failed ({}); used built-in regex-based fallback translator.",
-                    cli_name, err_msg
-                ));
-            }
-        }
-    }
-
-    let transpiler_engine = match source_language {
-        SourceLanguage::C => "Built-in Regex C Fallback (c2rust CLI not executed)".to_string(),
-        SourceLanguage::Cpp => {
-            "Built-in Regex C++ Fallback (cpp2rust CLI not executed)".to_string()
-        }
-    };
-
     let mut diagnostics = analyze_source_diagnostics(&source_lines);
     let (_, unsupported_constructs) = detect_unsupported_constructs(&source_lines);
 
@@ -327,6 +285,13 @@ pub fn convert_source_to_rust_with_style(
             (*raw_line).to_string(),
             translated_line,
         ));
+    }
+
+    if let Some(pending) = translator_state.pending_multiline_statement.take() {
+        let flushed = translate_single_line(&format!("{};", pending), &mut translator_state);
+        if !flushed.is_empty() {
+            translated_blocks.push((source_lines.len().max(1), pending, flushed));
+        }
     }
 
     let required_imports: Vec<String> = translator_state.required_imports.into_iter().collect();
@@ -372,14 +337,64 @@ pub fn convert_source_to_rust_with_style(
     }
 
     let mut faithful_rust_code = final_rust_lines.join("\n");
-    let (mut idiomatic_rust_code, post_processing) = postprocess_rust_code(&faithful_rust_code);
+    let (mut idiomatic_rust_code, mut post_processing) = postprocess_rust_code(&faithful_rust_code);
 
-    if !post_processing.compiler_verified
-        && !source_code.trim().is_empty()
-        && !diagnostics
-            .iter()
-            .any(|diag| diag.severity == DiagnosticSeverity::Error)
-    {
+    let has_base_errors = diagnostics
+        .iter()
+        .any(|diag| diag.severity == DiagnosticSeverity::Error);
+
+    let fallback_label = match source_language {
+        SourceLanguage::C => "Built-in Regex C Fallback (c2rust CLI not executed)".to_string(),
+        SourceLanguage::Cpp => {
+            "Built-in Regex C++ Fallback (cpp2rust CLI not executed)".to_string()
+        }
+    };
+
+    let (transpiler_engine, used_fallback) = if !unsupported_constructs.is_empty() {
+        fallback_reason = Some(
+            "Source contains C/C++ constructs unsupported for automatic safe Rust translation; used fallback diagnostics."
+                .to_string(),
+        );
+        (fallback_label, true)
+    } else if let Some(binary_path) = detect_external_transpiler_binary(source_language) {
+        let engine_label = format!("{} CLI ({})", cli_name, binary_path);
+        if post_processing.compiler_verified && !has_base_errors {
+            fallback_reason = None;
+            (engine_label, false)
+        } else {
+            match try_invoke_external_backbone_engine(source_code, source_language, &binary_path) {
+                Ok(backbone_rust_code) => {
+                    let (backbone_idiomatic, backbone_post) =
+                        postprocess_rust_code(&backbone_rust_code);
+                    if backbone_post.compiler_verified {
+                        faithful_rust_code = backbone_rust_code;
+                        idiomatic_rust_code = backbone_idiomatic;
+                        post_processing = backbone_post;
+                        diagnostics = analyze_base_source_diagnostics(&source_lines);
+                        fallback_reason = None;
+                        (engine_label, false)
+                    } else {
+                        fallback_reason = Some(format!(
+                            "External {} CLI output did not pass rustc verification; used built-in regex-based fallback translator.",
+                            cli_name
+                        ));
+                        (fallback_label, true)
+                    }
+                }
+                Err(err_msg) => {
+                    fallback_reason = Some(format!(
+                        "External {} CLI failed ({}); used built-in regex-based fallback translator.",
+                        cli_name, err_msg
+                    ));
+                    (fallback_label, true)
+                }
+            }
+        }
+    } else {
+        (fallback_label, true)
+    };
+
+    if !post_processing.compiler_verified && !source_code.trim().is_empty() && !has_base_errors {
         diagnostics.push(ConversionDiagnostic {
             line_number: 1,
             severity: DiagnosticSeverity::Error,
@@ -405,14 +420,9 @@ pub fn convert_source_to_rust_with_style(
         &idiomatic_rust_code,
         &output_style,
         &post_processing,
-        true,
+        used_fallback,
         &transpiler_engine,
     );
-    if post_processing.compiler_verified {
-        let notes_comment = format_explanations_as_rust_comments(&explanations);
-        faithful_rust_code = append_explanation_comments(faithful_rust_code, &notes_comment);
-        idiomatic_rust_code = append_explanation_comments(idiomatic_rust_code, &notes_comment);
-    }
     let generated_rust_code = match output_style {
         RustOutputStyle::Faithful => faithful_rust_code.clone(),
         RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
@@ -436,7 +446,7 @@ pub fn convert_source_to_rust_with_style(
         required_imports,
         conversion_time_milliseconds,
         transpiler_engine,
-        used_fallback: true,
+        used_fallback,
         fallback_reason,
         unsupported_constructs,
         post_processing,
@@ -878,9 +888,12 @@ int main() {
         assert!(vec_expl.ownership_and_iteration.contains("&vec"));
         assert!(vec_expl.ownership_and_iteration.contains("&mut vec"));
         assert!(vec_expl.ownership_and_iteration.contains(".into_iter()"));
-        assert!(result
+        assert!(!result
             .generated_rust_code
             .contains("// --- Rust Translation Notes"));
+        assert!(result
+            .generated_rust_code
+            .contains("// std::vector -> Vec<i32>: owns its heap buffer"));
         assert!(result.generated_rust_code.contains("RAII Drop"));
         assert!(result.generated_rust_code.contains("&vec"));
         assert!(result.generated_rust_code.contains("&mut vec"));
@@ -942,10 +955,69 @@ if (p != NULL) {
         assert!(!idiomatic.generated_rust_code.contains("Box<int>"));
         assert!(!idiomatic.generated_rust_code.contains("p != None"));
         assert!(idiomatic.post_processing.compiler_verified);
-        assert!(idiomatic
+        assert!(!idiomatic
             .generated_rust_code
             .contains("// --- Rust Translation Notes"));
+        assert!(idiomatic
+            .generated_rust_code
+            .contains("// Rust Box<i32>: single-owner heap allocation"));
         assert!(idiomatic.generated_rust_code.contains("Box<i32>"));
+    }
+
+    #[test]
+    fn converts_allman_c_strchr_loop_and_float_vector_insert_begin() {
+        let c_source = r#"#include <stdio.h>
+#include <string.h>
+
+int main(void)
+{
+    const char *str = "Try not. Do, or do not. There is no try.";
+    char target = 'T';
+    const char* result = str;
+
+    while((result = strchr(result, target)) != NULL)
+    {
+        printf("Found '%c' starting at '%s'\n", target, result);
+        ++result; // Increment result, otherwise we'll find target at the same location
+    }
+}"#;
+        let c_res = convert_source_to_rust(c_source, &SourceLanguage::C);
+        assert!(
+            c_res.post_processing.compiler_verified,
+            "strchr C program must compile cleanly:\n{}",
+            c_res.generated_rust_code
+        );
+        assert!(c_res.generated_rust_code.contains("fn main() {"));
+        assert!(c_res
+            .generated_rust_code
+            .contains("while let Some(_pos) = result.find(target) {"));
+        assert!(c_res.generated_rust_code.contains("result = &result[1..];"));
+
+        let cpp_source = r#"#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<float> fvec;
+
+    fvec.push_back(10.5);
+    fvec.push_back(30.5);
+    fvec.push_back(155.664);
+
+    fvec.insert(fvec.begin(), 999);
+
+    for (const auto& vec : fvec) {
+        std::cout << vec << std::endl;
+    }
+
+    return 0;
+}"#;
+        let cpp_res = convert_source_to_rust(cpp_source, &SourceLanguage::Cpp);
+        assert!(
+            cpp_res.post_processing.compiler_verified,
+            "vector::insert(begin(), 999) C++ program must compile cleanly:\n{}",
+            cpp_res.generated_rust_code
+        );
+        assert!(cpp_res.generated_rust_code.contains("fvec.insert(0, 999.0);"));
     }
 
     #[test]

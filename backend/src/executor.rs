@@ -367,6 +367,11 @@ async fn execute_locally(
                 .arg(&binary_path);
         }
         ExecutionLanguage::Rust => {
+            for extra_arg in
+                crate::transpiler::postprocessor::rustc_extra_args_for_code(&request.code)
+            {
+                compile_command.arg(extra_arg);
+            }
             compile_command.arg(&source_path).arg("-o").arg(&binary_path);
         }
     }

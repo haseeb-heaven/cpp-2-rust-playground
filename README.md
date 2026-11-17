@@ -4,7 +4,7 @@
 [![CI/CD](https://github.com/haseeb-heaven/cpp-2-rust-playground/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/haseeb-heaven/cpp-2-rust-playground/actions/workflows/ci.yml)
 [![C Engine: c2rust](https://img.shields.io/badge/C%20Engine-immunant%2Fc2rust-orange.svg)](https://github.com/immunant/c2rust)
 [![C++ Engine: cpp2rust](https://img.shields.io/badge/C%2B%2B%20Engine-Cpp2Rust%2Fcpp2rust-purple.svg)](https://github.com/Cpp2Rust/cpp2rust)
-[![Built with Gemini Argon & Carbon](https://img.shields.io/badge/Built%20With-Gemini%20Argon%20%26%20Carbon-4285F4.svg)](#credits--acknowledgments)
+[![AI Contributor: gemini-code-assist](https://img.shields.io/badge/AI%20Contributor-gemini--code--assist-4285F4.svg)](https://github.com/apps/gemini-code-assist)
 
 Repository: https://github.com/haseeb-heaven/cpp-2-rust-playground
 
@@ -87,7 +87,7 @@ See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full contributor list.
 - **C → Rust Backbone Transpiler**: [`immunant/c2rust`](https://github.com/immunant/c2rust) — C99-compliant C-to-Rust transpiler architecture
 - **C++ → Rust Backbone Transpiler**: [`Cpp2Rust/cpp2rust`](https://github.com/Cpp2Rust/cpp2rust) — AST-driven C++ to Safe Rust translator and rule system
 - **Testing & Review Tooling**: [`openqodex/openqodex`](https://github.com/openqodex/openqodex) and [Playwright](https://playwright.dev/)
-- **AI Co-Contributors**: **Antigravity** (Google DeepMind) powered by [**Gemini Argon (`@Gemini-Argon`)**](https://github.com/Gemini-Argon) (Planning & Architecture) and [**Gemini Carbon (`gemini-code-assist[bot]`)**](https://github.com/apps/gemini-code-assist) (Execution & Verification)
+- **AI Co-Contributor**: [**`gemini-code-assist[bot]`**](https://github.com/apps/gemini-code-assist) (Antigravity — Google DeepMind)
 
 ## License
 

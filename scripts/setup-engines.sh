@@ -31,7 +31,24 @@ fi
 
 if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then
   mkdir -p "${TOOLS_DIR}/cpp2rust/build"
-  if (cd "${TOOLS_DIR}/cpp2rust/build" && cmake -GNinja .. && ninja); then
+  LLVM_CMAKE_FLAGS=()
+  if [ -d "/opt/homebrew/opt/llvm/lib/cmake/llvm" ]; then
+    LLVM_CMAKE_FLAGS+=(
+      "-DLLVM_DIR=/opt/homebrew/opt/llvm/lib/cmake/llvm"
+      "-DClang_DIR=/opt/homebrew/opt/llvm/lib/cmake/clang"
+    )
+  fi
+  if command -v xcrun >/dev/null 2>&1; then
+    SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
+    if [ -n "${SDK_PATH}" ]; then
+      LLVM_CMAKE_FLAGS+=(
+        "-DCMAKE_OSX_SYSROOT=${SDK_PATH}"
+        "-DCMAKE_CXX_FLAGS=-Wno-incompatible-sysroot"
+      )
+    fi
+  fi
+  if (cd "${TOOLS_DIR}/cpp2rust/build" && cmake -GNinja -DCMAKE_BUILD_TYPE=Release "${LLVM_CMAKE_FLAGS[@]}" .. && ninja); then
+    ln -sf "${TOOLS_DIR}/cpp2rust/build/cpp2rust/cpp2rust" "${TOOLS_DIR}/bin/cpp2rust"
     echo "Built cpp2rust at ${TOOLS_DIR}/cpp2rust/build/cpp2rust/cpp2rust"
   else
     echo "Notice: Cpp2Rust/cpp2rust requires Clang/libclang-dev headers matching its CMake setup; built-in Safe C++ fallback remains active."

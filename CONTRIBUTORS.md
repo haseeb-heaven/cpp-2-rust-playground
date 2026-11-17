@@ -7,8 +7,7 @@ Thank you to all human maintainers, upstream transpiler projects, and AI co-cont
 | Contributor | GitHub Account | Role |
 |---|---|---|
 | **Haseeb Mir** | [@haseeb-heaven](https://github.com/haseeb-heaven) | Creator & Maintainer |
-| **Antigravity — Gemini Argon** | [@Gemini-Argon](https://github.com/Gemini-Argon) | AI Architecture, C/C++ Transpiler Post-Processing & Verification Pipeline |
-| **Antigravity — Gemini Carbon** | [`gemini-code-assist[bot]`](https://github.com/apps/gemini-code-assist) | AI Code Generation, Diagnostics, Ownership & Iteration Explanations, and Test Suite |
+| **Gemini Code Assist** | [`gemini-code-assist[bot]`](https://github.com/apps/gemini-code-assist) | AI Co-Contributor — C/C++ Transpiler Integration, Post-Processing, Diagnostics & Test Suite |
 
 ## Backbone Transpiler Credits
 

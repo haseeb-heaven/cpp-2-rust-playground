@@ -201,10 +201,12 @@ int main() {
 }`);
 
     await expect(page.getByTestId("rust-editor-pane")).toContainText("Vec<i32>");
-    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+    await expect(page.getByTestId("rust-editor-pane")).not.toContainText(
       "// --- Rust Translation Notes"
     );
-    await expect(page.getByTestId("rust-editor-pane")).toContainText("std::vector<int> -> Vec<i32>");
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "// std::vector -> Vec<i32>: owns its heap buffer"
+    );
     await expect(page.getByTestId("rust-editor-pane")).toContainText("RAII Drop");
     await expect(page.getByTestId("rust-editor-pane")).toContainText("&vec");
     await expect(page.getByTestId("rust-editor-pane")).toContainText("&mut vec");
@@ -244,8 +246,11 @@ if (p != NULL) {
     await expect(page.getByTestId("rust-editor-pane")).not.toContainText("Box<int>");
     await expect(page.getByTestId("rust-editor-pane")).not.toContainText("p != None");
     await expect(page.getByTestId("rust-editor-pane")).not.toContainText("drop(p);");
-    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+    await expect(page.getByTestId("rust-editor-pane")).not.toContainText(
       "// --- Rust Translation Notes"
+    );
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "// Rust Box<i32>: single-owner heap allocation"
     );
 
     await page.getByTestId("provider-select").selectOption("local");

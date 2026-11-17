@@ -90,8 +90,27 @@ static WHILE_REGEX: Lazy<Regex> =
 static IF_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^if\s*\((.+)\)\s*\{\s*$"#).unwrap());
 static ELSE_IF_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"^\}\s*else\s+if\s*\((.+)\)\s*\{\s*$"#).unwrap());
-static ELSE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^\}\s*else\s*\{\s*$"#).unwrap());
+    Lazy::new(|| Regex::new(r#"^(\}\s*)?else\s+if\s*\((.+)\)\s*\{\s*$"#).unwrap());
+static ELSE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"^(\}\s*)?else\s*\{\s*$"#).unwrap());
+static WHILE_STR_SEARCH_ASSIGN_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^while\s*\(\s*\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(strchr|strrchr|strstr)\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*\)?\s*(?:!=\s*(?:NULL|nullptr|0))?\s*\)\s*\{\s*$"#).unwrap()
+});
+static IF_STR_SEARCH_ASSIGN_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^if\s*\(\s*\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(strchr|strrchr|strstr)\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*\)?\s*(?:!=\s*(?:NULL|nullptr|0))?\s*\)\s*\{\s*$"#).unwrap()
+});
+static VEC_INSERT_BEGIN_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.begin\(\)(?:\s*\+\s*([^,]+))?\s*,\s*(.+)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_INSERT_END_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*(.+)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_BEGIN_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.begin\(\)(?:\s*\+\s*([^)]+))?\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_PUSH_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.(?:push_back|emplace_back)\s*\(\s*(.+)\s*\)\s*;\s*$"#).unwrap()
+});
 static SWITCH_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^switch\s*\((.+)\)\s*\{\s*$"#).unwrap());
 static CASE_REGEX: Lazy<Regex> =
@@ -165,10 +184,12 @@ static VAR_DECL_INIT_REGEX: Lazy<Regex> = Lazy::new(|| {
 static VAR_DECL_NO_INIT_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^(?:static\s+)?([A-Za-z_][A-Za-z0-9_:<>,\s]*?)(?:\s*([*&]+)\s*|\s+)([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$"#).unwrap()
 });
-static INCREMENT_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"^([A-Za-z_][A-Za-z0-9_.\[\]\->]*)\s*\+\+\s*;\s*$"#).unwrap());
-static DECREMENT_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"^([A-Za-z_][A-Za-z0-9_.\[\]\->]*)\s*--\s*;\s*$"#).unwrap());
+static INCREMENT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:\+\+\s*([A-Za-z_][A-Za-z0-9_.\[\]\->]*)|([A-Za-z_][A-Za-z0-9_.\[\]\->]*)\s*\+\+)\s*;\s*$"#).unwrap()
+});
+static DECREMENT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:--\s*([A-Za-z_][A-Za-z0-9_.\[\]\->]*)|([A-Za-z_][A-Za-z0-9_.\[\]\->]*)\s*--)\s*;\s*$"#).unwrap()
+});
 static RETURN_BRACE_INIT_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^return\s*\{(.*)\}\s*;\s*$"#).unwrap());
 static RETURN_STMT_REGEX: Lazy<Regex> =
@@ -1053,6 +1074,26 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         updated = strlen_regex
             .replace_all(&updated, "$1.len() as i32")
             .to_string();
+        let strcmp_eq_re =
+            Regex::new(r"\bstrcmp\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*==\s*0\b").unwrap();
+        updated = strcmp_eq_re.replace_all(&updated, "$1 == $2").to_string();
+        let strcmp_ne_re =
+            Regex::new(r"\bstrcmp\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*!=\s*0\b").unwrap();
+        updated = strcmp_ne_re.replace_all(&updated, "$1 != $2").to_string();
+        let strstr_ne_re = Regex::new(
+            r"\b(?:strstr|strchr)\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*!=\s*(?:NULL|nullptr|None|0)\b",
+        )
+        .unwrap();
+        updated = strstr_ne_re
+            .replace_all(&updated, "$1.contains($2)")
+            .to_string();
+        let strstr_eq_re = Regex::new(
+            r"\b(?:strstr|strchr)\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*==\s*(?:NULL|nullptr|None|0)\b",
+        )
+        .unwrap();
+        updated = strstr_eq_re
+            .replace_all(&updated, "!$1.contains($2)")
+            .to_string();
         let numeric_limits_regex =
             Regex::new(r"(?:std::)?numeric_limits<\s*([^>]+?)\s*>::(max|min)\(\)").unwrap();
         updated = numeric_limits_regex
@@ -1510,28 +1551,6 @@ fn qualify_struct_fields(statement: &str, state: &TranslatorState) -> String {
     })
 }
 
-fn paren_balance_outside_strings(line: &str) -> isize {
-    let mut balance = 0isize;
-    let mut in_quotes = false;
-    let mut prev_escape = false;
-    for character in line.chars() {
-        if in_quotes {
-            if character == '"' && !prev_escape {
-                in_quotes = false;
-            }
-            prev_escape = character == '\\' && !prev_escape;
-            continue;
-        }
-        match character {
-            '"' => in_quotes = true,
-            '(' => balance += 1,
-            ')' => balance -= 1,
-            _ => {}
-        }
-    }
-    balance
-}
-
 pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> String {
     let leading_whitespace: String = raw_line.chars().take_while(|c| c.is_whitespace()).collect();
     let raw_trimmed = raw_line.trim();
@@ -1561,14 +1580,16 @@ pub fn translate_single_line(raw_line: &str, state: &mut TranslatorState) -> Str
         || working_owned == "public:"
         || working_owned == "private:"
         || working_owned == "protected:";
+    let is_template_header = working_owned.starts_with("template") && working_owned.ends_with('>');
 
     if !working_owned.ends_with(';')
         && !working_owned.ends_with('{')
         && !working_owned.ends_with('}')
         && !state.inside_enum_block
         && !state.inside_designated_init
-        && (paren_balance_outside_strings(&working_owned) > 0
-            || (!is_label && working_owned.ends_with(':')))
+        && !working_owned.starts_with('#')
+        && !is_template_header
+        && !is_label
     {
         state.pending_multiline_statement = Some(working_owned);
         return String::new();
@@ -2302,11 +2323,73 @@ fn translate_single_line_core(
         );
     }
 
-    format!(
-        "{}{}",
-        leading_whitespace,
-        translate_statement_line(trimmed, state)
-    )
+    let stmt = translate_statement_line(trimmed, state);
+    if stmt.contains('\n') {
+        stmt.lines()
+            .map(|line| {
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}{}", leading_whitespace, line)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        format!("{}{}", leading_whitespace, stmt)
+    }
+}
+
+fn coerce_arg_for_float_vec(raw_arg: &str, state: &TranslatorState) -> String {
+    let translated = translate_expression_with_state(raw_arg, state);
+    let trimmed = translated.trim();
+    let is_int_literal = trimmed
+        .strip_prefix('-')
+        .unwrap_or(trimmed)
+        .chars()
+        .all(|c| c.is_ascii_digit())
+        && !trimmed.is_empty();
+    if is_int_literal {
+        format!("{}.0", trimmed)
+    } else {
+        translated
+    }
+}
+
+fn rust_type_concept_comment(rust_type: &str) -> Option<String> {
+    if rust_type.starts_with("Vec<") {
+        Some(format!(
+            "// std::vector -> {}: owns its heap buffer (RAII Drop; iterate via &vec to borrow, &mut vec to mutate, or vec/.into_iter() to move)",
+            rust_type
+        ))
+    } else if rust_type.starts_with("HashMap<") {
+        Some(format!(
+            "// std::unordered_map/map -> {}: owned key-value table; .insert(k, v) moves keys/values instead of default-inserting on []",
+            rust_type
+        ))
+    } else if rust_type.starts_with("HashSet<") {
+        Some(format!(
+            "// std::unordered_set/set -> {}: owned unique-key set; .contains(&k) borrows the lookup key",
+            rust_type
+        ))
+    } else if rust_type.starts_with("VecDeque<") {
+        Some(format!(
+            "// std::queue/deque -> {}: double-ended ring buffer (.push_back / .pop_front)",
+            rust_type
+        ))
+    } else if rust_type.starts_with("Option<") {
+        Some(format!(
+            "// std::optional / nullable -> {}: explicit Some(v)/None replaces unchecked null/uninitialized access",
+            rust_type
+        ))
+    } else if rust_type.starts_with("Box<") {
+        Some(format!(
+            "// Rust {}: single-owner heap allocation (non-null; freed automatically via RAII Drop when out of scope)",
+            rust_type
+        ))
+    } else {
+        None
+    }
 }
 
 fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> String {
@@ -2523,6 +2606,60 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!("{}.reverse();", vector_name);
     }
 
+    if let Some(captures) = VEC_INSERT_BEGIN_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let offset_opt = captures.get(2).map(|m| m.as_str().trim());
+        let raw_val = captures.get(3).unwrap().as_str().trim();
+        let val_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(raw_val, state)
+        } else {
+            translate_expression_with_state(raw_val, state)
+        };
+        let index_expr = match offset_opt {
+            None => "0".to_string(),
+            Some(off) if off.chars().all(|c| c.is_ascii_digit()) => off.to_string(),
+            Some(off) => format!("({}) as usize", translate_expression_with_state(off, state)),
+        };
+        return format!(
+            "{}.insert({}, {}); // Vec::insert takes a usize index instead of a C++ begin() iterator",
+            vec_name, index_expr, val_expr
+        );
+    }
+
+    if let Some(captures) = VEC_INSERT_END_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        let val_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(raw_val, state)
+        } else {
+            translate_expression_with_state(raw_val, state)
+        };
+        return format!("{}.push({});", vec_name, val_expr);
+    }
+
+    if let Some(captures) = VEC_ERASE_BEGIN_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let offset_opt = captures.get(2).map(|m| m.as_str().trim());
+        let index_expr = match offset_opt {
+            None => "0".to_string(),
+            Some(off) if off.chars().all(|c| c.is_ascii_digit()) => off.to_string(),
+            Some(off) => format!("({}) as usize", translate_expression_with_state(off, state)),
+        };
+        return format!(
+            "{}.remove({}); // Vec::remove takes a usize index instead of a C++ iterator",
+            vec_name, index_expr
+        );
+    }
+
+    if let Some(captures) = VEC_PUSH_CALL_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        if state.float_vector_variables.contains(vec_name) {
+            let val_expr = coerce_arg_for_float_vec(raw_val, state);
+            return format!("{}.push({});", vec_name, val_expr);
+        }
+    }
+
     if let Some(captures) = MAP_PAIR_INSERT_REGEX.captures(trimmed) {
         let map_name = captures.get(1).unwrap().as_str();
         let mut key_expr =
@@ -2553,10 +2690,12 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         let variable_name = captures.get(2).unwrap().as_str();
         let size_expr = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
         let init_val = translate_expression_with_state(captures.get(4).unwrap().as_str(), state);
-        state.register_variable_type(variable_name, &format!("Vec<{}>", inner_type));
+        let rust_type = format!("Vec<{}>", inner_type);
+        state.register_variable_type(variable_name, &rust_type);
+        let comment = rust_type_concept_comment(&rust_type).unwrap();
         return format!(
-            "let mut {}: Vec<{}> = vec![{}; ({}) as usize];",
-            variable_name, inner_type, init_val, size_expr
+            "{}\nlet mut {}: {} = vec![{}; ({}) as usize];",
+            comment, variable_name, rust_type, init_val, size_expr
         );
     }
 
@@ -2564,10 +2703,12 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         let inner_type = map_cpp_type_to_rust(captures.get(1).unwrap().as_str(), state);
         let variable_name = captures.get(2).unwrap().as_str();
         let size_expr = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
-        state.register_variable_type(variable_name, &format!("Vec<{}>", inner_type));
+        let rust_type = format!("Vec<{}>", inner_type);
+        state.register_variable_type(variable_name, &rust_type);
+        let comment = rust_type_concept_comment(&rust_type).unwrap();
         return format!(
-            "let mut {}: Vec<{}> = vec![Default::default(); ({}) as usize];",
-            variable_name, inner_type, size_expr
+            "{}\nlet mut {}: {} = vec![Default::default(); ({}) as usize];",
+            comment, variable_name, rust_type, size_expr
         );
     }
 
@@ -2624,9 +2765,15 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
         state.declared_variables.insert(item_name.to_string());
         if binding_type.contains("const") && binding_type.contains('&') {
-            return format!("for {} in {}.iter().cloned() {{", item_name, collection_expr);
+            return format!(
+                "for {} in {}.iter().cloned() {{ // & borrows elements immutably without moving the container",
+                item_name, collection_expr
+            );
         } else if binding_type.contains('&') {
-            return format!("for {} in &mut {} {{", item_name, collection_expr);
+            return format!(
+                "for {} in &mut {} {{ // &mut borrows elements mutably in-place without reallocating",
+                item_name, collection_expr
+            );
         } else {
             return format!("for {} in {}.iter().cloned() {{", item_name, collection_expr);
         }
@@ -2691,8 +2838,8 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         state.box_pointer_variables.insert(variable_name.to_string());
         if let Some((flex_field, _)) = state.flex_array_structs.get(struct_type) {
             return format!(
-                "let mut {}: Box<{}> = Box::new({} {{ {}: vec![Default::default(); ({}) as usize], ..Default::default() }});",
-                variable_name, struct_type, struct_type, flex_field, count_expr
+                "// Rust Box<{}>: single-owner heap allocation with Vec replacing C99 flexible array member\nlet mut {}: Box<{}> = Box::new({} {{ {}: vec![Default::default(); ({}) as usize], ..Default::default() }});",
+                struct_type, variable_name, struct_type, struct_type, flex_field, count_expr
             );
         }
     }
@@ -2707,8 +2854,8 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         }
         state.box_pointer_variables.insert(variable_name.to_string());
         return format!(
-            "let mut {}: Box<{}> = Box::new(Default::default());",
-            variable_name, rust_type
+            "// Rust Box<{}>: single-owner heap allocation (non-null; freed automatically via RAII Drop when out of scope)\nlet mut {}: Box<{}> = Box::new(Default::default());",
+            rust_type, variable_name, rust_type
         );
     }
 
@@ -2730,7 +2877,7 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             }
         }
         return format!(
-            "let mut {}: {} = {} {{ {}, ..Default::default() }};",
+            "// C99 compound literal pointer -> stack-owned Rust struct with Default fill\nlet mut {}: {} = {} {{ {}, ..Default::default() }};",
             variable_name,
             type_name,
             literal_type,
@@ -2753,8 +2900,8 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             ),
         );
         return format!(
-            "let mut {}: Vec<Vec<{}>> = vec![vec![Default::default(); ({}) as usize]; ({}) as usize];",
-            variable_name, elem_rust, cols_expr, rows_expr
+            "// C99 runtime VLA -> heap-allocated nested Vec<Vec<{}>> (Rust arrays require compile-time const lengths)\nlet mut {}: Vec<Vec<{}>> = vec![vec![Default::default(); ({}) as usize]; ({}) as usize];",
+            elem_rust, variable_name, elem_rust, cols_expr, rows_expr
         );
     }
 
@@ -2764,7 +2911,10 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
 
     if let Some(captures) = FREE_CALL_REGEX.captures(trimmed) {
         let target = captures.get(1).unwrap().as_str();
-        return format!("drop({});", target);
+        return format!(
+            "drop({}); // Explicit early drop (Rust also frees Box automatically at scope exit)",
+            target
+        );
     }
 
     if let Some(captures) = STRUCT_ZERO_INIT_REGEX.captures(trimmed) {
@@ -2786,18 +2936,53 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         );
     }
 
+    if let Some(captures) = WHILE_STR_SEARCH_ASSIGN_REGEX.captures(trimmed) {
+        let target_var = captures.get(1).unwrap().as_str().trim();
+        let func_name = captures.get(2).unwrap().as_str().trim();
+        let haystack = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
+        let needle = translate_expression_with_state(captures.get(4).unwrap().as_str(), state);
+        state.str_slice_variables.insert(target_var.to_string());
+        state.char_ptr_iter_variables.insert(target_var.to_string());
+        let method = if func_name == "strrchr" { "rfind" } else { "find" };
+        return format!(
+            "// C {} pointer scan -> Rust Option<usize> pattern match on &str slice\nwhile let Some(_pos) = {}.{}({}) {{\n    {} = &{}[_pos..];",
+            func_name, haystack, method, needle, target_var, haystack
+        );
+    }
+
+    if let Some(captures) = IF_STR_SEARCH_ASSIGN_REGEX.captures(trimmed) {
+        let target_var = captures.get(1).unwrap().as_str().trim();
+        let func_name = captures.get(2).unwrap().as_str().trim();
+        let haystack = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
+        let needle = translate_expression_with_state(captures.get(4).unwrap().as_str(), state);
+        state.str_slice_variables.insert(target_var.to_string());
+        state.char_ptr_iter_variables.insert(target_var.to_string());
+        let method = if func_name == "strrchr" { "rfind" } else { "find" };
+        return format!(
+            "if let Some(_pos) = {}.{}({}) {{\n    {} = &{}[_pos..];",
+            haystack, method, needle, target_var, haystack
+        );
+    }
+
     if let Some(captures) = WHILE_REGEX.captures(trimmed) {
         let condition = translate_expression_with_state(captures.get(1).unwrap().as_str(), state);
         return format!("while {} {{", condition);
     }
 
     if let Some(captures) = ELSE_IF_REGEX.captures(trimmed) {
-        let condition = translate_expression_with_state(captures.get(1).unwrap().as_str(), state);
-        return format!("}} else if {} {{", condition);
+        let has_close_brace = captures.get(1).is_some();
+        let condition = translate_expression_with_state(captures.get(2).unwrap().as_str(), state);
+        if has_close_brace {
+            return format!("}} else if {} {{", condition);
+        }
+        return format!("else if {} {{", condition);
     }
 
-    if ELSE_REGEX.is_match(trimmed) {
-        return "} else {".to_string();
+    if let Some(captures) = ELSE_REGEX.captures(trimmed) {
+        if captures.get(1).is_some() {
+            return "} else {".to_string();
+        }
+        return "else {".to_string();
     }
 
     if let Some(captures) = SINGLE_LINE_IF_REGEX.captures(trimmed) {
@@ -2872,8 +3057,15 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
     }
 
     if let Some(captures) = INCREMENT_REGEX.captures(trimmed) {
-        let raw_target = captures.get(1).unwrap().as_str().trim();
-        if state.char_ptr_iter_variables.contains(raw_target) {
+        let raw_target = captures
+            .get(1)
+            .or_else(|| captures.get(2))
+            .unwrap()
+            .as_str()
+            .trim();
+        if state.char_ptr_iter_variables.contains(raw_target)
+            || state.str_slice_variables.contains(raw_target)
+        {
             return format!("{} = &{}[1..];", raw_target, raw_target);
         }
         let target = translate_expression_with_state(raw_target, state);
@@ -2881,7 +3073,13 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
     }
 
     if let Some(captures) = DECREMENT_REGEX.captures(trimmed) {
-        let target = translate_expression_with_state(captures.get(1).unwrap().as_str(), state);
+        let raw_target = captures
+            .get(1)
+            .or_else(|| captures.get(2))
+            .unwrap()
+            .as_str()
+            .trim();
+        let target = translate_expression_with_state(raw_target, state);
         return format!("{} -= 1;", target);
     }
 
@@ -2987,10 +3185,14 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             if rust_type == "_" {
                 return format!("let {}{} = {};", mutability, variable_name, translated_value);
             }
-            return format!(
+            let decl_line = format!(
                 "let {}{}: {} = {};",
                 mutability, variable_name, rust_type, translated_value
             );
+            if let Some(comment) = rust_type_concept_comment(&rust_type) {
+                return format!("{}\n{}", comment, decl_line);
+            }
+            return decl_line;
         }
     }
 
@@ -3009,19 +3211,23 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
                 .insert(variable_name.to_string(), combined_type.clone());
             let rust_type = map_cpp_type_to_rust(&combined_type, state);
             state.register_variable_type(variable_name, &rust_type);
-            if rust_type.starts_with("Vec<") {
-                return format!("let mut {}: {} = Vec::new();", variable_name, rust_type);
+            let decl_line = if rust_type.starts_with("Vec<") {
+                format!("let mut {}: {} = Vec::new();", variable_name, rust_type)
             } else if rust_type.starts_with("VecDeque<") {
-                return format!("let mut {}: {} = VecDeque::new();", variable_name, rust_type);
+                format!("let mut {}: {} = VecDeque::new();", variable_name, rust_type)
             } else if rust_type.starts_with("HashMap<") {
-                return format!("let mut {}: {} = HashMap::new();", variable_name, rust_type);
+                format!("let mut {}: {} = HashMap::new();", variable_name, rust_type)
             } else if rust_type.starts_with("HashSet<") {
-                return format!("let mut {}: {} = HashSet::new();", variable_name, rust_type);
+                format!("let mut {}: {} = HashSet::new();", variable_name, rust_type)
             } else if rust_type == "String" {
-                return format!("let mut {}: String = String::new();", variable_name);
+                format!("let mut {}: String = String::new();", variable_name)
             } else {
-                return format!("let mut {}: {} = Default::default();", variable_name, rust_type);
+                format!("let mut {}: {} = Default::default();", variable_name, rust_type)
+            };
+            if let Some(comment) = rust_type_concept_comment(&rust_type) {
+                return format!("{}\n{}", comment, decl_line);
             }
+            return decl_line;
         }
     }
 

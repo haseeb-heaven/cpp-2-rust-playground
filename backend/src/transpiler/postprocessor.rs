@@ -4,15 +4,89 @@ use crate::models::{
     ExecutionLanguage, ExecutionMode, ExecutionProvider, ExecutionRequest, PostProcessingSummary,
     SourceLanguage,
 };
-use crate::transpiler::{detect_external_transpiler_binary, TempEngineDirectory};
+use crate::transpiler::{detect_external_transpiler_binary, workspace_root_dir, TempEngineDirectory};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+static CPP2RUST_LINK_ARGS: Lazy<Vec<String>> = Lazy::new(|| {
+    let build_dir = workspace_root_dir().join(".tools/cpp2rust/build");
+    let mut crate_map: HashMap<String, PathBuf> = HashMap::new();
+    let mut dep_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+
+    for target_name in ["libc-dep-target", "libcc2rs-target"] {
+        let artifacts_path = build_dir.join(target_name).join("artifacts.json");
+        let Ok(contents) = fs::read_to_string(&artifacts_path) else {
+            continue;
+        };
+        for line in contents.lines() {
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if val.get("reason").and_then(|r| r.as_str()) != Some("compiler-artifact") {
+                continue;
+            }
+            let Some(name) = val
+                .get("target")
+                .and_then(|t| t.get("name"))
+                .and_then(|n| n.as_str())
+            else {
+                continue;
+            };
+            let Some(filenames) = val.get("filenames").and_then(|f| f.as_array()) else {
+                continue;
+            };
+            for file_val in filenames {
+                let Some(file_str) = file_val.as_str() else {
+                    continue;
+                };
+                let path = PathBuf::from(file_str);
+                if matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("rlib" | "dylib" | "so")
+                ) {
+                    if let Some(parent) = path.parent() {
+                        dep_dirs.insert(parent.to_path_buf());
+                    }
+                    crate_map.insert(name.to_string(), path);
+                }
+            }
+        }
+    }
+
+    let mut args = Vec::new();
+    for dir in dep_dirs {
+        args.push("-L".to_string());
+        args.push(format!("dependency={}", dir.display()));
+    }
+    for crate_name in ["libcc2rs", "libc", "nix", "jiff"] {
+        if let Some(lib_path) = crate_map.get(crate_name) {
+            args.push("--extern".to_string());
+            args.push(format!("{}={}", crate_name, lib_path.display()));
+        }
+    }
+    args
+});
+
+pub fn rustc_extra_args_for_code(rust_code: &str) -> Vec<String> {
+    if rust_code.contains("libcc2rs") || rust_code.contains("extern crate libc") {
+        let mut args = vec![
+            "--edition".to_string(),
+            "2024".to_string(),
+            "-A".to_string(),
+            "warnings".to_string(),
+        ];
+        args.extend(CPP2RUST_LINK_ARGS.iter().cloned());
+        args
+    } else {
+        vec!["--edition".to_string(), "2021".to_string()]
+    }
+}
 
 static LIBC_TYPE_MAP: &[(&str, &str)] = &[
     ("libc::c_int", "i32"),
@@ -161,11 +235,12 @@ fn check_rustc_and_collect_diagnostics(
     } else {
         "lib"
     };
-    let output = Command::new(rustc)
-        .arg("--crate-type")
-        .arg(crate_type)
-        .arg("--edition")
-        .arg("2021")
+    let mut cmd = Command::new(rustc);
+    cmd.arg("--crate-type").arg(crate_type);
+    for extra_arg in rustc_extra_args_for_code(rust_code) {
+        cmd.arg(extra_arg);
+    }
+    let output = cmd
         .arg("--emit=metadata")
         .arg("--error-format=json")
         .arg("-o")
@@ -649,23 +724,15 @@ fn has_balanced_parens(expr: &str) -> bool {
     balance == 0
 }
 
+static INNER_DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^\s*(?:(?:pub(?:\s*\([^)]*\))?\s+)?(?:(?:async|const|unsafe)\s+)*(?:let|fn|struct|enum|type|const|static|mod|use|trait|impl)\b|macro_rules!\s*)",
+    )
+    .unwrap()
+});
+
 fn has_inner_declaration_statement(code_lines: &[String]) -> bool {
-    const DECL_PREFIXES: &[&str] = &[
-        "let ",
-        "fn ",
-        "struct ",
-        "enum ",
-        "type ",
-        "const ",
-        "static ",
-        "mod ",
-        "use ",
-        "macro_rules!",
-    ];
-    code_lines.iter().any(|line| {
-        let trimmed = line.trim_start();
-        DECL_PREFIXES.iter().any(|prefix| trimmed.starts_with(prefix))
-    })
+    code_lines.iter().any(|line| INNER_DECL_REGEX.is_match(line))
 }
 
 fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
@@ -739,7 +806,7 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
                     next_idx += 1;
                 }
                 if next_idx < lines.len() {
-                    if let Some(assign_cap) = deref_init_line_re.captures(&lines[next_idx]) {
+                    if let Some(assign_cap) = deref_init_line_re.captures(&code_only_lines[next_idx]) {
                         if assign_cap.get(1).unwrap().as_str() == var_name {
                             let expr = assign_cap.get(2).unwrap().as_str().trim();
                             let self_ref_re =
@@ -766,53 +833,63 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
 
     let drop_line_re =
         Regex::new(r"^\s*drop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$").unwrap();
+    let custom_fn_drop_re = Regex::new(r"\bfn\s+drop\b").unwrap();
     let box_typed_decl_re = Regex::new(
         r"^\s*let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*Box<([^>]+)>\s*=",
     )
     .unwrap();
     let any_let_decl_re = Regex::new(r"^\s*let\s+").unwrap();
 
-    if let Some(main_idx) = code_only_lines
+    let has_custom_fn_drop = code_only_lines
         .iter()
-        .position(|l| l.trim() == "fn main() {")
-    {
-        let mut depth = 0isize;
-        let mut main_end_idx = None;
-        for (k, code_line) in code_only_lines.iter().enumerate().skip(main_idx) {
-            for ch in code_line.chars() {
-                if ch == '{' {
-                    depth += 1;
-                } else if ch == '}' {
-                    depth -= 1;
+        .any(|line| custom_fn_drop_re.is_match(line));
+
+    if !has_custom_fn_drop {
+        if let Some(main_idx) = code_only_lines
+            .iter()
+            .position(|l| l.trim() == "fn main() {")
+        {
+            let mut depth = 0isize;
+            let mut main_end_idx = None;
+            for (k, code_line) in code_only_lines.iter().enumerate().skip(main_idx) {
+                for ch in code_line.chars() {
+                    if ch == '{' {
+                        depth += 1;
+                    } else if ch == '}' {
+                        depth -= 1;
+                    }
+                }
+                if depth == 0 && k > main_idx {
+                    main_end_idx = Some(k);
+                    break;
                 }
             }
-            if depth == 0 && k > main_idx {
-                main_end_idx = Some(k);
-                break;
-            }
-        }
-        if let Some(end_k) = main_end_idx {
-            let mut prev_k = end_k.saturating_sub(1);
-            while prev_k > main_idx && code_only_lines[prev_k].trim().is_empty() {
-                prev_k -= 1;
-            }
-            if prev_k > main_idx {
-                if let Some(drop_cap) = drop_line_re.captures(&code_only_lines[prev_k]) {
-                    let drop_var = drop_cap.get(1).unwrap().as_str();
-                    if let Some((decl_idx, box_type)) = ((main_idx + 1)..prev_k)
-                        .rev()
-                        .find_map(|pos| {
-                            box_typed_decl_re
-                                .captures(&code_only_lines[pos])
-                                .filter(|cap| cap.get(1).unwrap().as_str() == drop_var)
-                                .map(|cap| (pos, cap.get(2).unwrap().as_str().trim()))
-                        })
-                    {
-                        let is_last_declared = !code_only_lines[(decl_idx + 1)..prev_k]
-                            .iter()
-                            .any(|line| any_let_decl_re.is_match(line));
-                        if TRIVIAL_PRIMITIVE_TYPES.contains(&box_type) && is_last_declared {
-                            lines.remove(prev_k);
+            if let Some(end_k) = main_end_idx {
+                let mut prev_k = end_k.saturating_sub(1);
+                while prev_k > main_idx && code_only_lines[prev_k].trim().is_empty() {
+                    prev_k -= 1;
+                }
+                let has_nested_braces = code_only_lines[(main_idx + 1)..=prev_k]
+                    .iter()
+                    .any(|line| line.contains('{') || line.contains('}'));
+                if prev_k > main_idx && !has_nested_braces {
+                    if let Some(drop_cap) = drop_line_re.captures(&code_only_lines[prev_k]) {
+                        let drop_var = drop_cap.get(1).unwrap().as_str();
+                        if let Some((decl_idx, box_type)) = ((main_idx + 1)..prev_k)
+                            .rev()
+                            .find_map(|pos| {
+                                box_typed_decl_re
+                                    .captures(&code_only_lines[pos])
+                                    .filter(|cap| cap.get(1).unwrap().as_str() == drop_var)
+                                    .map(|cap| (pos, cap.get(2).unwrap().as_str().trim()))
+                            })
+                        {
+                            let is_last_declared = !code_only_lines[(decl_idx + 1)..prev_k]
+                                .iter()
+                                .any(|line| any_let_decl_re.is_match(line));
+                            if TRIVIAL_PRIMITIVE_TYPES.contains(&box_type) && is_last_declared {
+                                lines.remove(prev_k);
+                            }
                         }
                     }
                 }
