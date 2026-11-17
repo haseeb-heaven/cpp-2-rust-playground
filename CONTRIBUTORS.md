@@ -1,6 +1,6 @@
 # Contributors
 
-Thank you to all human maintainers, upstream transpiler projects, and AI co-contributors who helped build **`cpp-2-rust-playground`** (`RustC-Playground`).
+Thank you to all human maintainers, upstream transpiler projects, and AI co-contributors who helped build **`cpp-2-rust-playground`** (`C/C++ to Rust Playground`).
 
 ## Maintainers & AI Co-Contributors
 

@@ -1,4 +1,4 @@
-# cpp-2-rust-playground (`RustC-Playground`)
+# cpp-2-rust-playground (`C/C++ to Rust Playground`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![CI/CD](https://github.com/haseeb-heaven/cpp-2-rust-playground/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/haseeb-heaven/cpp-2-rust-playground/actions/workflows/ci.yml)

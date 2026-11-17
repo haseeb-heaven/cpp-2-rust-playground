@@ -39,7 +39,7 @@ pub fn create_application_router(configuration: ApplicationConfiguration) -> Rou
 async fn health_check_handler() -> Json<Value> {
     Json(json!({
         "status": "ok",
-        "service": "RustC-Playground Backend"
+        "service": "C/C++ to Rust Playground Backend"
     }))
 }
 

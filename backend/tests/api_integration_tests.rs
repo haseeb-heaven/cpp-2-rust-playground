@@ -33,7 +33,7 @@ async fn health_endpoint_returns_ok() {
     let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
     let parsed: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(parsed["status"], "ok");
-    assert_eq!(parsed["service"], "RustC-Playground Backend");
+    assert_eq!(parsed["service"], "C/C++ to Rust Playground Backend");
 }
 
 #[tokio::test]

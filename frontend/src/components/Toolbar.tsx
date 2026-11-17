@@ -90,7 +90,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     <header className="studio-toolbar">
       <div className="toolbar-group toolbar-brand">
         <Code2 size={20} className="brand-icon" />
-        <span className="brand-title">RustC-Playground</span>
+        <span className="brand-title">C/C++ to Rust Playground</span>
         <div className="language-toggle" role="group" aria-label="Source language">
           <button
             type="button"

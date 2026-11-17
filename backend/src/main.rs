@@ -11,7 +11,7 @@ async fn main() {
     let router = create_application_router(configuration);
 
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    info!("RustC-Playground backend listening on http://{}", address);
+    info!("C/C++ to Rust Playground backend listening on http://{}", address);
 
     let listener = tokio::net::TcpListener::bind(address)
         .await

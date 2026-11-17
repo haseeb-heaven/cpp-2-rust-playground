@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("RustC-Playground End-to-End Suite", () => {
+test.describe("C/C++ to Rust Playground End-to-End Suite", () => {
   test("accepts C++ standard-library completion with Tab", async ({ page }) => {
     await page.goto("/");
 
@@ -22,7 +22,7 @@ test.describe("RustC-Playground End-to-End Suite", () => {
   }) => {
     await page.goto("/");
 
-    await expect(page.getByText("RustC-Playground", { exact: true })).toBeVisible();
+    await expect(page.getByText("C/C++ to Rust Playground", { exact: true })).toBeVisible();
     await expect(page.getByTestId("source-editor-pane")).toBeVisible();
     await expect(page.getByTestId("rust-editor-pane")).toBeVisible();
 

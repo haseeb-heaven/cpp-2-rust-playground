@@ -105,9 +105,9 @@ describe("App component", () => {
     );
   });
 
-  it("renders RustC-Playground toolbar, editors, and console", () => {
+  it("renders the C/C++ to Rust Playground toolbar, editors, and console", () => {
     render(<App />);
-    expect(screen.getByText("RustC-Playground")).toBeInTheDocument();
+    expect(screen.getByText("C/C++ to Rust Playground")).toBeInTheDocument();
     expect(screen.getByTestId("source-editor-pane")).toBeInTheDocument();
     expect(screen.getByTestId("rust-editor-pane")).toBeInTheDocument();
     expect(screen.getByTestId("output-console")).toBeInTheDocument();

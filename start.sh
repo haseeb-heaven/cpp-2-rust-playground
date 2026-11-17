@@ -20,7 +20,7 @@ stop_port_if_running() {
 
 cleanup() {
   echo ""
-  echo "Shutting down RustC-Playground servers..."
+  echo "Shutting down C/C++ to Rust Playground servers..."
   [[ -n "${BACKEND_PID:-}" ]] && kill "${BACKEND_PID}" 2>/dev/null || true
   [[ -n "${FRONTEND_PID:-}" ]] && kill "${FRONTEND_PID}" 2>/dev/null || true
 }

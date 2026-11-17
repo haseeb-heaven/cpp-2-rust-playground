@@ -14,7 +14,7 @@ pub fn get_premade_examples() -> Vec<CodeExample> {
 using namespace std;
 
 int main() {
-    string studioName = "RustC-Playground";
+    string studioName = "C/C++ to Rust Playground";
     int version = 1;
     cout << "Welcome to " << studioName << " v" << version << endl;
     return 0;

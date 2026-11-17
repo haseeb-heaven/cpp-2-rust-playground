@@ -38,7 +38,7 @@ const DEFAULT_CPP_SOURCE = `#include <iostream>
 using namespace std;
 
 int main() {
-    string studioName = "RustC-Playground";
+    string studioName = "C/C++ to Rust Playground";
     int count = 3;
     for (int index = 0; index < count; index++) {
         cout << studioName << " step " << index << endl;
@@ -47,7 +47,7 @@ int main() {
 }`;
 
 const DEFAULT_RUST_CODE = `fn main() {
-    let mut studioName: String = String::from("RustC-Playground");
+    let mut studioName: String = String::from("C/C++ to Rust Playground");
     let mut count: i32 = 3;
     for index in 0..count {
         println!("{} step {}", studioName, index);
