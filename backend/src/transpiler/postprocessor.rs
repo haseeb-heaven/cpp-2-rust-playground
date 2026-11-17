@@ -520,8 +520,19 @@ fn simplify_idiomatic_box_and_null_checks(code: &str) -> (String, bool) {
                         .get(j + 1)
                         .is_some_and(|next| next.trim().starts_with("else"));
                     if !has_else_after {
-                        lines.remove(j);
-                        lines.remove(i);
+                        let has_inner_let = lines[(i + 1)..j]
+                            .iter()
+                            .any(|l| l.trim_start().starts_with("let "));
+                        if has_inner_let {
+                            let indent: String = lines[i]
+                                .chars()
+                                .take_while(|c| c.is_whitespace())
+                                .collect();
+                            lines[i] = format!("{}{{", indent);
+                        } else {
+                            lines.remove(j);
+                            lines.remove(i);
+                        }
                         unwrapped = true;
                         break;
                     }

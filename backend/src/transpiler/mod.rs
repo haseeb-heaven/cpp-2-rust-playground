@@ -947,4 +947,31 @@ if (p != NULL) {
             .contains("// --- Rust Translation Notes"));
         assert!(idiomatic.generated_rust_code.contains("Box<i32>"));
     }
+
+    #[test]
+    fn idiomatic_simplifier_preserves_scope_when_if_true_contains_let() {
+        let c_source = r#"#include <stdlib.h>
+#include <stdio.h>
+
+int main() {
+    int x = 1;
+    int *p = malloc(sizeof(int));
+    if (p != NULL) {
+        int x = 2;
+        *p = x;
+        printf("%d ", *p);
+        free(p);
+    }
+    printf("%d\n", x);
+    return 0;
+}"#;
+        let idiomatic = convert_source_to_rust_with_style(
+            c_source,
+            &SourceLanguage::C,
+            RustOutputStyle::Idiomatic,
+        );
+        assert!(idiomatic.post_processing.compiler_verified);
+        assert!(!idiomatic.generated_rust_code.contains("if true"));
+        assert!(idiomatic.generated_rust_code.contains("{\n        let x: i32 = 2;"));
+    }
 }

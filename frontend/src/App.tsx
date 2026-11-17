@@ -213,11 +213,6 @@ export const App: React.FC = () => {
     [lastGeneratedRustCode, rustCode, isRustManuallyEdited]
   );
 
-  const handleSourceCodeChange = useCallback((nextSource: string) => {
-    setSourceCode(nextSource);
-    setIsRustManuallyEdited(false);
-  }, []);
-
   const handleOutputStyleChange = useCallback(
     (nextStyle: RustOutputStyle) => {
       setOutputStyle(nextStyle);
@@ -533,7 +528,7 @@ export const App: React.FC = () => {
       title={sourceLanguage === "c" ? "C Source" : "C++ Source"}
       language="cpp"
       value={sourceCode}
-      onChange={handleSourceCodeChange}
+      onChange={setSourceCode}
       theme={theme}
       highlightedLines={highlightedSourceLines}
       errorLines={sourceErrorLines}
