@@ -939,7 +939,7 @@ fn is_variable_mutated(code: &str, var_name: &str) -> bool {
     }
 
     let method_mutate_re = Regex::new(&format!(
-        r"\b{}\.(?:push|push_back|pop|pop_front|pop_back|insert|entry|sort|sort_by|reverse|clear|remove|retain|extend|swap|push_str|truncate)\s*\(",
+        r"\b{}\.(?:push|push_back|pop|pop_front|pop_back|insert|entry|sort|sort_by|reverse|clear|remove|retain|extend|swap|push_str|truncate|dedup|fill|drain|resize|reserve|shrink_to_fit|splice)\s*\(",
         escaped
     ))
     .unwrap();

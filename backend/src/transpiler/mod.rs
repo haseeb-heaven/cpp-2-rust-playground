@@ -1065,4 +1065,92 @@ int main() {
         assert!(idiomatic.contains("println!(\"after\");"));
         assert!(idiomatic.contains("println!(\"}}\");"));
     }
+
+    #[test]
+    fn converts_cpp_stl_vector_erase_remove_algorithms_strings_and_maps() {
+        let erase_remove_src = r#"#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> fvec = {3};
+
+    fvec.push_back(10);
+    fvec.push_back(30);
+    fvec.push_back(155);
+    fvec.emplace_back(888);
+
+    fvec.erase(std::remove(fvec.begin(), fvec.end(), 155), fvec.end());
+
+    for (const auto& vec : fvec) {
+        std::cout << vec << std::endl;
+    }
+
+    return 0;
+}"#;
+        let res = convert_source_to_rust(erase_remove_src, &SourceLanguage::Cpp);
+        assert!(
+            res.post_processing.compiler_verified,
+            "erase-remove C++ program must compile cleanly:\n{}",
+            res.generated_rust_code
+        );
+        assert!(res
+            .generated_rust_code
+            .contains("fvec.retain(|&_x| _x != 155);"));
+        assert!(res.generated_rust_code.contains("fvec.push(888);"));
+
+        let algorithms_src = r#"#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <unordered_map>
+#include <string>
+
+int main() {
+    std::vector<int> nums = {5, 1, 5, 2, 3, 3};
+    std::sort(nums.begin(), nums.end());
+    nums.erase(std::unique(nums.begin(), nums.end()), nums.end());
+    nums.insert(nums.begin(), 2, 9);
+    nums.resize(10, 0);
+    nums.reserve(20);
+    nums.shrink_to_fit();
+
+    if (std::find(nums.begin(), nums.end(), 5) != nums.end()) {
+        std::cout << std::count(nums.begin(), nums.end(), 9) << std::endl;
+    }
+    int total = std::accumulate(nums.begin(), nums.end(), 0);
+    std::string text = std::to_string(total);
+    int parsed = std::stoi(text);
+    if (text.find("1") != std::string::npos) {
+        std::cout << parsed << std::endl;
+    }
+
+    std::unordered_map<std::string, int> scores;
+    scores["alice"] = 10;
+    scores["bob"] = 20;
+    scores.erase("bob");
+    if (scores.find("alice") != scores.end()) {
+        for (const auto& [k, v] : scores) {
+            std::cout << k << " " << v << std::endl;
+        }
+    }
+    return 0;
+}"#;
+        let algo_res = convert_source_to_rust(algorithms_src, &SourceLanguage::Cpp);
+        assert!(
+            algo_res.post_processing.compiler_verified,
+            "comprehensive C++ STL program must compile cleanly:\n{}\nDiagnostics: {:?}",
+            algo_res.generated_rust_code,
+            algo_res.diagnostics
+        );
+        assert!(algo_res.generated_rust_code.contains("nums.dedup();"));
+        assert!(algo_res.generated_rust_code.contains("nums.splice(0..0, std::iter::repeat(9).take(2));"));
+        assert!(algo_res.generated_rust_code.contains("nums.resize(10, 0);"));
+        assert!(algo_res.generated_rust_code.contains("nums.contains(&5)"));
+        assert!(algo_res.generated_rust_code.contains("nums.iter().fold(0, |acc, &_x| acc + _x)"));
+        assert!(algo_res.generated_rust_code.contains("format!(\"{}\", total)"));
+        assert!(algo_res.generated_rust_code.contains(".parse::<i32>().unwrap_or(0)"));
+        assert!(algo_res.generated_rust_code.contains("scores.remove(\"bob\");"));
+        assert!(algo_res.generated_rust_code.contains("scores.contains_key(\"alice\")"));
+        assert!(algo_res.generated_rust_code.contains("for (k, v) in &scores {"));
+    }
 }

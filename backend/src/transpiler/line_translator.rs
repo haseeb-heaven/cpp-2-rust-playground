@@ -83,7 +83,7 @@ static FOR_RANGE_DOWN_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^for\s*\(\s*(?:int|size_t|long|auto)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);\s*[A-Za-z_][A-Za-z0-9_]*\s*(>=|>)\s*([^;]+);\s*[^)]*--\s*\)\s*\{\s*$"#).unwrap()
 });
 static FOR_EACH_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^for\s*\(\s*(const\s+auto&|auto&|auto|[A-Za-z_][A-Za-z0-9_:<>]*&?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^)]+)\)\s*\{\s*$"#).unwrap()
+    Regex::new(r#"^for\s*\(\s*(const\s+auto&|auto&|auto|[A-Za-z_][A-Za-z0-9_:<>]*&?)\s+(?:\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\]|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*([^)]+)\)\s*\{\s*$"#).unwrap()
 });
 static WHILE_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^while\s*\((.+)\)\s*\{\s*$"#).unwrap());
@@ -99,17 +99,65 @@ static WHILE_STR_SEARCH_ASSIGN_REGEX: Lazy<Regex> = Lazy::new(|| {
 static IF_STR_SEARCH_ASSIGN_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^if\s*\(\s*\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(strchr|strrchr|strstr)\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)\s*\)?\s*(?:!=\s*(?:NULL|nullptr|0))?\s*\)\s*\{\s*$"#).unwrap()
 });
+static VEC_ERASE_REMOVE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*(?:std::)?remove\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*,\s*(.+?)\s*\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_REMOVE_IF_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*(?:std::)?remove_if\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*,\s*(.+?)\s*\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
+});
+static STD_ERASE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:std::)?erase\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*(.+?)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_UNIQUE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*(?:std::)?unique\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_ALL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_RANGE_BEGIN_BEGIN_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)(?:\s*\+\s*([^,]+))?\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)\s*\+\s*([^)]+)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_RANGE_BEGIN_END_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)(?:\s*\+\s*([^,]+))?\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ERASE_LAST_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*-\s*1\s*\)\s*;\s*$"#).unwrap()
+});
 static VEC_INSERT_BEGIN_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.begin\(\)(?:\s*\+\s*([^,]+))?\s*,\s*(.+)\s*\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)(?:\s*\+\s*([^,]+))?\s*,\s*(.+)\s*\)\s*;\s*$"#).unwrap()
 });
 static VEC_INSERT_END_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*(.+)\s*\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*,\s*(.+)\s*\)\s*;\s*$"#).unwrap()
 });
 static VEC_ERASE_BEGIN_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.begin\(\)(?:\s*\+\s*([^)]+))?\s*\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)(?:\s*\+\s*([^)]+))?\s*\)\s*;\s*$"#).unwrap()
 });
 static VEC_PUSH_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.(?:push_back|emplace_back)\s*\(\s*(.+)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_RESIZE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.resize\s*\(\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_RESERVE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.reserve\s*\(\s*(.+?)\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_SHRINK_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.shrink_to_fit\s*\(\s*\)\s*;\s*$"#).unwrap()
+});
+static VEC_ASSIGN_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.assign\s*\(\s*([^,]+)\s*,\s*(.+?)\s*\)\s*;\s*$"#).unwrap()
+});
+static FILL_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:std::)?fill\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*,\s*(.+?)\s*\)\s*;\s*$"#).unwrap()
+});
+static SORT_DESC_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:std::)?sort\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.(?:c?rbegin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?rend\(\)|c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*,\s*(?:std::)?greater<[^>]*>\s*\(\s*\))\s*\)\s*;\s*$"#).unwrap()
+});
+static SWAP_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:(?:std::)?swap\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)|([A-Za-z_][A-Za-z0-9_]*)\.swap\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))\s*;\s*$"#).unwrap()
+});
+static CONTAINER_ERASE_KEY_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*(.+?)\s*\)\s*;\s*$"#).unwrap()
 });
 static SWITCH_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^switch\s*\((.+)\)\s*\{\s*$"#).unwrap());
@@ -167,10 +215,10 @@ static VECTOR_CTOR_ONE_ARG_REGEX: Lazy<Regex> = Lazy::new(|| {
         .unwrap()
 });
 static SORT_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^(?:std::)?sort\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^(?:std::)?sort\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
 });
 static REVERSE_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^(?:std::)?reverse\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*\)\s*;\s*$"#).unwrap()
+    Regex::new(r#"^(?:std::)?reverse\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
 });
 static MAP_PAIR_INSERT_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.insert\s*\(\s*\{\s*([^,]+)\s*,\s*([^}]+)\s*\}\s*\)\s*;\s*$"#).unwrap()
@@ -834,6 +882,54 @@ fn adjust_reference_calls(input: &str, state: &TranslatorState) -> String {
     output
 }
 
+fn is_inside_string_literal(text: &str, target_byte_idx: usize) -> bool {
+    let mut in_double = false;
+    let mut in_single = false;
+    let mut escaped = false;
+    for (idx, ch) in text.char_indices() {
+        if idx >= target_byte_idx {
+            break;
+        }
+        if in_double {
+            if ch == '"' && !escaped {
+                in_double = false;
+            }
+            escaped = ch == '\\' && !escaped;
+        } else if in_single {
+            if ch == '\'' && !escaped {
+                in_single = false;
+            }
+            escaped = ch == '\\' && !escaped;
+        } else if ch == '"' {
+            in_double = true;
+            escaped = false;
+        } else if ch == '\'' {
+            in_single = true;
+            escaped = false;
+        }
+    }
+    in_double || in_single
+}
+
+fn replace_outside_strings_with_regex<F>(input: &str, regex: &Regex, mut replacer: F) -> String
+where
+    F: FnMut(&regex::Captures) -> String,
+{
+    let mut result = String::with_capacity(input.len());
+    let mut last_end = 0usize;
+    for captures in regex.captures_iter(input) {
+        let full = captures.get(0).unwrap();
+        if is_inside_string_literal(input, full.start()) {
+            continue;
+        }
+        result.push_str(&input[last_end..full.start()]);
+        result.push_str(&replacer(&captures));
+        last_end = full.end();
+    }
+    result.push_str(&input[last_end..]);
+    result
+}
+
 pub fn translate_expression_with_state(expression: &str, state: &TranslatorState) -> String {
     let mut output = expression.trim().to_string();
 
@@ -911,6 +1007,9 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         ("std::make_pair(", "("),
         ("make_pair(", "("),
         ("std::string(", "String::from("),
+        (".c_str()", ".as_str()"),
+        (".cbegin()", ".begin()"),
+        (".cend()", ".end()"),
     ];
 
     output = transform_outside_string_literals(&output, |segment| {
@@ -1016,6 +1115,249 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         let inner = &output[1..output.len() - 1];
         output = format!("vec![{}]", inner.trim());
     }
+
+    let str_npos_ne_re = Regex::new(
+        r"([A-Za-z_][A-Za-z0-9_]*)\.find\s*\(\s*([^)]+)\s*\)\s*!=\s*(?:std::)?string::npos\b",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &str_npos_ne_re, |captures| {
+        format!(
+            "{}.contains({})",
+            captures.get(1).unwrap().as_str(),
+            captures.get(2).unwrap().as_str().trim()
+        )
+    });
+
+    let str_npos_eq_re = Regex::new(
+        r"([A-Za-z_][A-Za-z0-9_]*)\.find\s*\(\s*([^)]+)\s*\)\s*==\s*(?:std::)?string::npos\b",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &str_npos_eq_re, |captures| {
+        format!(
+            "!{}.contains({})",
+            captures.get(1).unwrap().as_str(),
+            captures.get(2).unwrap().as_str().trim()
+        )
+    });
+
+    let container_find_ne_re = Regex::new(
+        r"([A-Za-z_][A-Za-z0-9_]*)\.find\s*\(\s*([^)]+)\s*\)\s*!=\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &container_find_ne_re, |captures| {
+        let receiver = captures.get(1).unwrap().as_str();
+        let argument = captures.get(2).unwrap().as_str().trim();
+        let arg_ref = if argument.starts_with('"') || argument.starts_with('&') {
+            argument.to_string()
+        } else {
+            format!("&{}", argument)
+        };
+        if state.hashset_variables.contains(receiver) {
+            format!("{}.contains({})", receiver, arg_ref)
+        } else {
+            format!("{}.contains_key({})", receiver, arg_ref)
+        }
+    });
+
+    let container_find_eq_re = Regex::new(
+        r"([A-Za-z_][A-Za-z0-9_]*)\.find\s*\(\s*([^)]+)\s*\)\s*==\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &container_find_eq_re, |captures| {
+        let receiver = captures.get(1).unwrap().as_str();
+        let argument = captures.get(2).unwrap().as_str().trim();
+        let arg_ref = if argument.starts_with('"') || argument.starts_with('&') {
+            argument.to_string()
+        } else {
+            format!("&{}", argument)
+        };
+        if state.hashset_variables.contains(receiver) {
+            format!("!{}.contains({})", receiver, arg_ref)
+        } else {
+            format!("!{}.contains_key({})", receiver, arg_ref)
+        }
+    });
+
+    let vec_find_ne_re = Regex::new(
+        r"(?:std::)?find\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*([^)]+)\s*\)\s*!=\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &vec_find_ne_re, |captures| {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        let val = if state.float_vector_variables.contains(vec_name) {
+            coerce_float_literal_str(raw_val)
+        } else {
+            raw_val.to_string()
+        };
+        let val_ref = if val.starts_with('&') {
+            val
+        } else {
+            format!("&{}", val)
+        };
+        format!("{}.contains({})", vec_name, val_ref)
+    });
+
+    let vec_find_eq_re = Regex::new(
+        r"(?:std::)?find\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*([^)]+)\s*\)\s*==\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &vec_find_eq_re, |captures| {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        let val = if state.float_vector_variables.contains(vec_name) {
+            coerce_float_literal_str(raw_val)
+        } else {
+            raw_val.to_string()
+        };
+        let val_ref = if val.starts_with('&') {
+            val
+        } else {
+            format!("&{}", val)
+        };
+        format!("!{}.contains({})", vec_name, val_ref)
+    });
+
+    let binary_search_re = Regex::new(
+        r"(?:std::)?binary_search\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*([^)]+)\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &binary_search_re, |captures| {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        let val = if state.float_vector_variables.contains(vec_name) {
+            coerce_float_literal_str(raw_val)
+        } else {
+            raw_val.to_string()
+        };
+        let val_ref = if val.starts_with('&') {
+            val
+        } else {
+            format!("&{}", val)
+        };
+        format!("{}.binary_search({}).is_ok()", vec_name, val_ref)
+    });
+
+    let std_count_re = Regex::new(
+        r"(^|[^.\w])(?:std::)?count\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*([^)]+)\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &std_count_re, |captures| {
+        let prefix = captures.get(1).unwrap().as_str();
+        let vec_name = captures.get(2).unwrap().as_str();
+        let raw_val = captures.get(3).unwrap().as_str().trim();
+        let val = if state.float_vector_variables.contains(vec_name) {
+            coerce_float_literal_str(raw_val)
+        } else {
+            raw_val.to_string()
+        };
+        format!(
+            "{}({}.iter().filter(|_x| **_x == {}).count() as i32)",
+            prefix, vec_name, val
+        )
+    });
+
+    let accumulate_re = Regex::new(
+        r"(^|[^.\w])(?:std::)?accumulate\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*,\s*([^)]+)\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &accumulate_re, |captures| {
+        let prefix = captures.get(1).unwrap().as_str();
+        let vec_name = captures.get(2).unwrap().as_str();
+        let raw_init = captures.get(3).unwrap().as_str().trim();
+        let init_val = if state.float_vector_variables.contains(vec_name) {
+            coerce_float_literal_str(raw_init)
+        } else {
+            raw_init.to_string()
+        };
+        format!(
+            "{}{}.iter().fold({}, |acc, &_x| acc + _x)",
+            prefix, vec_name, init_val
+        )
+    });
+
+    let min_max_elem_re = Regex::new(
+        r"\*\s*(?:std::)?(min_element|max_element)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.end\(\)\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &min_max_elem_re, |captures| {
+        let func = captures.get(1).unwrap().as_str();
+        let vec_name = captures.get(2).unwrap().as_str();
+        let rust_method = if func == "min_element" { "min_by" } else { "max_by" };
+        format!(
+            "*{}.iter().{}(|a, b| a.partial_cmp(b).unwrap()).unwrap()",
+            vec_name, rust_method
+        )
+    });
+
+    let substr_two_re = Regex::new(
+        r"([A-Za-z_][A-Za-z0-9_]*)\.substr\s*\(\s*([^,()]+(?:\([^()]*\)[^,()]*)?)\s*,\s*([^()]+(?:\([^()]*\)[^()]*)*)\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &substr_two_re, |captures| {
+        format!(
+            "{}.chars().skip(({}) as usize).take(({}) as usize).collect::<String>()",
+            captures.get(1).unwrap().as_str(),
+            captures.get(2).unwrap().as_str().trim(),
+            captures.get(3).unwrap().as_str().trim()
+        )
+    });
+
+    let substr_one_re = Regex::new(
+        r"([A-Za-z_][A-Za-z0-9_]*)\.substr\s*\(\s*([^,()]+(?:\([^()]*\)[^()]*)*)\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &substr_one_re, |captures| {
+        format!(
+            "{}.chars().skip(({}) as usize).collect::<String>()",
+            captures.get(1).unwrap().as_str(),
+            captures.get(2).unwrap().as_str().trim()
+        )
+    });
+
+    let to_string_re =
+        Regex::new(r"(^|[^.\w])(?:std::)?to_string\s*\(((?:[^()]|\([^()]*\))+)\)").unwrap();
+    output = replace_outside_strings_with_regex(&output, &to_string_re, |captures| {
+        format!(
+            "{}format!(\"{{}}\", {})",
+            captures.get(1).unwrap().as_str(),
+            captures.get(2).unwrap().as_str().trim()
+        )
+    });
+
+    for (func_pattern, rust_ty, default_val) in [
+        ("stoi", "i32", "0"),
+        ("stoll", "i64", "0"),
+        ("stol", "i64", "0"),
+        ("stof", "f32", "0.0"),
+        ("stod", "f64", "0.0"),
+    ] {
+        let parse_re = Regex::new(&format!(
+            r"(^|[^.\w])(?:std::)?{}\s*\(((?:[^()]|\([^()]*\))+)\)",
+            func_pattern
+        ))
+        .unwrap();
+        output = replace_outside_strings_with_regex(&output, &parse_re, |captures| {
+            format!(
+                "{}({}).trim().parse::<{}>().unwrap_or({})",
+                captures.get(1).unwrap().as_str(),
+                captures.get(2).unwrap().as_str().trim(),
+                rust_ty,
+                default_val
+            )
+        });
+    }
+
+    let vec_at_re = Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\.at\s*\(([^)]+)\)").unwrap();
+    output = replace_outside_strings_with_regex(&output, &vec_at_re, |captures| {
+        let target = captures.get(1).unwrap().as_str();
+        let idx = captures.get(2).unwrap().as_str().trim();
+        if idx.chars().all(|c| c.is_ascii_digit()) {
+            format!("{}[{}]", target, idx)
+        } else {
+            format!("{}[({}) as usize]", target, idx)
+        }
+    });
 
     let count_regex = Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\.count\(([^)]+)\)").unwrap();
     output = count_regex
@@ -2340,8 +2682,7 @@ fn translate_single_line_core(
     }
 }
 
-fn coerce_arg_for_float_vec(raw_arg: &str, state: &TranslatorState) -> String {
-    let translated = translate_expression_with_state(raw_arg, state);
+fn coerce_float_literal_str(translated: &str) -> String {
     let trimmed = translated.trim();
     let is_int_literal = trimmed
         .strip_prefix('-')
@@ -2352,8 +2693,38 @@ fn coerce_arg_for_float_vec(raw_arg: &str, state: &TranslatorState) -> String {
     if is_int_literal {
         format!("{}.0", trimmed)
     } else {
-        translated
+        translated.to_string()
     }
+}
+
+fn coerce_arg_for_float_vec(raw_arg: &str, state: &TranslatorState) -> String {
+    let translated = translate_expression_with_state(raw_arg, state);
+    coerce_float_literal_str(&translated)
+}
+
+fn format_usize_expr(expr: &str) -> String {
+    let trimmed = expr.trim();
+    if trimmed.chars().all(|c| c.is_ascii_digit()) {
+        trimmed.to_string()
+    } else {
+        format!("({}) as usize", trimmed)
+    }
+}
+
+fn translate_cpp_predicate(pred_raw: &str, item_ident: &str, state: &TranslatorState) -> String {
+    let lambda_re = Regex::new(
+        r#"^\[[^\]]*\]\s*\(\s*(?:const\s+)?[A-Za-z_][A-Za-z0-9_:<>]*&?\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{\s*return\s+(.+?);\s*\}\s*$"#,
+    )
+    .unwrap();
+    if let Some(cap) = lambda_re.captures(pred_raw.trim()) {
+        let param_name = cap.get(1).unwrap().as_str();
+        let body_expr = translate_expression_with_state(cap.get(2).unwrap().as_str(), state);
+        let param_re = Regex::new(&format!(r"\b{}\b", regex::escape(param_name))).unwrap();
+        let bound_expr = param_re.replace_all(&body_expr, item_ident).to_string();
+        return format!("!({})", bound_expr);
+    }
+    let translated_pred = translate_expression_with_state(pred_raw, state);
+    format!("!(({})({}))", translated_pred, item_ident)
 }
 
 fn rust_type_concept_comment(rust_type: &str) -> Option<String> {
@@ -2590,6 +2961,11 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         );
     }
 
+    if let Some(captures) = SORT_DESC_CALL_REGEX.captures(trimmed) {
+        let vector_name = captures.get(1).unwrap().as_str();
+        return format!("{}.sort_by(|a, b| b.partial_cmp(a).unwrap());", vector_name);
+    }
+
     if let Some(captures) = SORT_CALL_REGEX.captures(trimmed) {
         let vector_name = captures.get(1).unwrap().as_str();
         if state.float_vector_variables.contains(vector_name) {
@@ -2606,19 +2982,147 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!("{}.reverse();", vector_name);
     }
 
-    if let Some(captures) = VEC_INSERT_BEGIN_REGEX.captures(trimmed) {
+    if let Some(captures) = FILL_CALL_REGEX.captures(trimmed) {
+        let vector_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        let val_expr = if state.float_vector_variables.contains(vector_name) {
+            coerce_arg_for_float_vec(raw_val, state)
+        } else {
+            translate_expression_with_state(raw_val, state)
+        };
+        return format!("{}.fill({});", vector_name, val_expr);
+    }
+
+    if let Some(captures) = SWAP_CALL_REGEX.captures(trimmed) {
+        let a = captures.get(1).or_else(|| captures.get(3)).unwrap().as_str();
+        let b = captures.get(2).or_else(|| captures.get(4)).unwrap().as_str();
+        return format!("std::mem::swap(&mut {}, &mut {});", a, b);
+    }
+
+    if let Some(captures) = VEC_ERASE_REMOVE_REGEX.captures(trimmed) {
         let vec_name = captures.get(1).unwrap().as_str();
-        let offset_opt = captures.get(2).map(|m| m.as_str().trim());
-        let raw_val = captures.get(3).unwrap().as_str().trim();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
         let val_expr = if state.float_vector_variables.contains(vec_name) {
             coerce_arg_for_float_vec(raw_val, state)
         } else {
             translate_expression_with_state(raw_val, state)
         };
+        return format!(
+            "{}.retain(|&_x| _x != {}); // C++ erase-remove idiom -> Vec::retain filters elements in-place in O(n)",
+            vec_name, val_expr
+        );
+    }
+
+    if let Some(captures) = VEC_ERASE_REMOVE_IF_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_pred = captures.get(2).unwrap().as_str().trim();
+        let negated_pred = translate_cpp_predicate(raw_pred, "_x", state);
+        return format!(
+            "{}.retain(|&_x| {}); // C++ erase-remove_if idiom -> Vec::retain keeps matching elements in-place",
+            vec_name, negated_pred
+        );
+    }
+
+    if let Some(captures) = STD_ERASE_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let raw_val = captures.get(2).unwrap().as_str().trim();
+        let val_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(raw_val, state)
+        } else {
+            translate_expression_with_state(raw_val, state)
+        };
+        return format!("{}.retain(|&_x| _x != {});", vec_name, val_expr);
+    }
+
+    if let Some(captures) = VEC_ERASE_UNIQUE_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        return format!(
+            "{}.dedup(); // C++ erase-unique idiom -> Vec::dedup removes consecutive duplicates in-place",
+            vec_name
+        );
+    }
+
+    if let Some(captures) = VEC_ERASE_ALL_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        return format!("{}.clear();", vec_name);
+    }
+
+    if let Some(captures) = VEC_ERASE_RANGE_BEGIN_BEGIN_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let start_expr = match captures.get(2).map(|m| m.as_str().trim()) {
+            None => "0".to_string(),
+            Some(s) => format_usize_expr(&translate_expression_with_state(s, state)),
+        };
+        let end_expr = format_usize_expr(&translate_expression_with_state(
+            captures.get(3).unwrap().as_str(),
+            state,
+        ));
+        return format!("{}.drain({}..{});", vec_name, start_expr, end_expr);
+    }
+
+    if let Some(captures) = VEC_ERASE_RANGE_BEGIN_END_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let start_expr = match captures.get(2).map(|m| m.as_str().trim()) {
+            None => "0".to_string(),
+            Some(s) => format_usize_expr(&translate_expression_with_state(s, state)),
+        };
+        return format!("{}.drain({}..);", vec_name, start_expr);
+    }
+
+    if let Some(captures) = VEC_ERASE_LAST_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        return format!("{}.pop();", vec_name);
+    }
+
+    if let Some(captures) = VEC_INSERT_BEGIN_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let offset_opt = captures.get(2).map(|m| m.as_str().trim());
+        let raw_rest = captures.get(3).unwrap().as_str().trim();
         let index_expr = match offset_opt {
             None => "0".to_string(),
-            Some(off) if off.chars().all(|c| c.is_ascii_digit()) => off.to_string(),
-            Some(off) => format!("({}) as usize", translate_expression_with_state(off, state)),
+            Some(off) => format_usize_expr(&translate_expression_with_state(off, state)),
+        };
+        let args = split_top_level_comma(raw_rest);
+        if args.len() == 2 {
+            let count_expr = format_usize_expr(&translate_expression_with_state(args[0], state));
+            let val_expr = if state.float_vector_variables.contains(vec_name) {
+                coerce_arg_for_float_vec(args[1], state)
+            } else {
+                translate_expression_with_state(args[1], state)
+            };
+            return format!(
+                "{}.splice({index}..{index}, std::iter::repeat({}).take({})); // Vec::splice inserts N copies at a usize index",
+                vec_name,
+                val_expr,
+                count_expr,
+                index = index_expr
+            );
+        }
+        let raw_val = args.first().copied().unwrap_or(raw_rest).trim();
+        if raw_val.starts_with('{') && raw_val.ends_with('}') {
+            let inner = &raw_val[1..raw_val.len() - 1];
+            let elems = split_top_level_comma(inner)
+                .into_iter()
+                .map(|elem| {
+                    if state.float_vector_variables.contains(vec_name) {
+                        coerce_arg_for_float_vec(elem, state)
+                    } else {
+                        translate_expression_with_state(elem, state)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "{}.splice({index}..{index}, [{}]);",
+                vec_name,
+                elems,
+                index = index_expr
+            );
+        }
+        let val_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(raw_val, state)
+        } else {
+            translate_expression_with_state(raw_val, state)
         };
         return format!(
             "{}.insert({}, {}); // Vec::insert takes a usize index instead of a C++ begin() iterator",
@@ -2642,13 +3146,71 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         let offset_opt = captures.get(2).map(|m| m.as_str().trim());
         let index_expr = match offset_opt {
             None => "0".to_string(),
-            Some(off) if off.chars().all(|c| c.is_ascii_digit()) => off.to_string(),
-            Some(off) => format!("({}) as usize", translate_expression_with_state(off, state)),
+            Some(off) => format_usize_expr(&translate_expression_with_state(off, state)),
         };
         return format!(
             "{}.remove({}); // Vec::remove takes a usize index instead of a C++ iterator",
             vec_name, index_expr
         );
+    }
+
+    if let Some(captures) = VEC_RESIZE_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let new_len = format_usize_expr(&translate_expression_with_state(
+            captures.get(2).unwrap().as_str(),
+            state,
+        ));
+        let fill_val = match captures.get(3).map(|m| m.as_str().trim()) {
+            None => "Default::default()".to_string(),
+            Some(v) if state.float_vector_variables.contains(vec_name) => {
+                coerce_arg_for_float_vec(v, state)
+            }
+            Some(v) => translate_expression_with_state(v, state),
+        };
+        return format!("{}.resize({}, {});", vec_name, new_len, fill_val);
+    }
+
+    if let Some(captures) = VEC_RESERVE_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let cap_expr = format_usize_expr(&translate_expression_with_state(
+            captures.get(2).unwrap().as_str(),
+            state,
+        ));
+        return format!("{}.reserve({});", vec_name, cap_expr);
+    }
+
+    if let Some(captures) = VEC_SHRINK_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        return format!("{}.shrink_to_fit();", vec_name);
+    }
+
+    if let Some(captures) = VEC_ASSIGN_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let count_expr = format_usize_expr(&translate_expression_with_state(
+            captures.get(2).unwrap().as_str(),
+            state,
+        ));
+        let raw_val = captures.get(3).unwrap().as_str().trim();
+        let val_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(raw_val, state)
+        } else {
+            translate_expression_with_state(raw_val, state)
+        };
+        return format!("{} = vec![{}; {}];", vec_name, val_expr, count_expr);
+    }
+
+    if let Some(captures) = CONTAINER_ERASE_KEY_REGEX.captures(trimmed) {
+        let name = captures.get(1).unwrap().as_str();
+        if state.hashmap_variables.contains(name) || state.hashset_variables.contains(name) {
+            let key_expr =
+                translate_expression_with_state(captures.get(2).unwrap().as_str(), state);
+            let key_ref = if key_expr.starts_with('"') || key_expr.starts_with('&') {
+                key_expr
+            } else {
+                format!("&{}", key_expr)
+            };
+            return format!("{}.remove({});", name, key_ref);
+        }
     }
 
     if let Some(captures) = VEC_PUSH_CALL_REGEX.captures(trimmed) {
@@ -2689,8 +3251,12 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         let inner_type = map_cpp_type_to_rust(captures.get(1).unwrap().as_str(), state);
         let variable_name = captures.get(2).unwrap().as_str();
         let size_expr = translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
-        let init_val = translate_expression_with_state(captures.get(4).unwrap().as_str(), state);
         let rust_type = format!("Vec<{}>", inner_type);
+        let init_val = if rust_type == "Vec<f32>" || rust_type == "Vec<f64>" {
+            coerce_arg_for_float_vec(captures.get(4).unwrap().as_str(), state)
+        } else {
+            translate_expression_with_state(captures.get(4).unwrap().as_str(), state)
+        };
         state.register_variable_type(variable_name, &rust_type);
         let comment = rust_type_concept_comment(&rust_type).unwrap();
         return format!(
@@ -2760,9 +3326,25 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
 
     if let Some(captures) = FOR_EACH_REGEX.captures(trimmed) {
         let binding_type = captures.get(1).unwrap().as_str().trim();
-        let item_name = captures.get(2).unwrap().as_str();
         let collection_expr =
-            translate_expression_with_state(captures.get(3).unwrap().as_str(), state);
+            translate_expression_with_state(captures.get(5).unwrap().as_str(), state);
+        if let (Some(k), Some(v)) = (captures.get(2), captures.get(3)) {
+            let key_name = k.as_str();
+            let val_name = v.as_str();
+            state.declared_variables.insert(key_name.to_string());
+            state.declared_variables.insert(val_name.to_string());
+            if binding_type.contains('&') && !binding_type.contains("const") {
+                return format!(
+                    "for ({}, {}) in &mut {} {{ // &mut borrows map values mutably in-place",
+                    key_name, val_name, collection_expr
+                );
+            }
+            return format!(
+                "for ({}, {}) in &{} {{ // & borrows map key-value pairs without moving ownership",
+                key_name, val_name, collection_expr
+            );
+        }
+        let item_name = captures.get(4).unwrap().as_str();
         state.declared_variables.insert(item_name.to_string());
         if binding_type.contains("const") && binding_type.contains('&') {
             return format!(
@@ -2993,6 +3575,14 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             translate_expression_with_state(raw_cond, state)
         };
         let inline_stmt = translate_statement_line(captures.get(2).unwrap().as_str(), state);
+        if inline_stmt.contains("//") || inline_stmt.contains('\n') {
+            let indented_body = inline_stmt
+                .lines()
+                .map(|line| format!("    {}", line))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return format!("if {} {{\n{}\n}}", condition, indented_body);
+        }
         return format!("if {} {{ {} }}", condition, inline_stmt);
     }
 
@@ -3170,7 +3760,21 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
             };
             state.register_variable_type(variable_name, &rust_type);
 
-            let mut translated_value = translate_expression_with_state(raw_value, state);
+            let mut translated_value = if (rust_type == "Vec<f32>" || rust_type == "Vec<f64>")
+                && raw_value.starts_with('{')
+                && raw_value.ends_with('}')
+            {
+                let inner = &raw_value[1..raw_value.len() - 1];
+                let coerced_elems = split_top_level_comma(inner)
+                    .into_iter()
+                    .filter(|elem| !elem.trim().is_empty())
+                    .map(|elem| coerce_arg_for_float_vec(elem, state))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("vec![{}]", coerced_elems)
+            } else {
+                translate_expression_with_state(raw_value, state)
+            };
             if rust_type == "String" && translated_value.starts_with('"') {
                 translated_value = format!("String::from({})", translated_value);
             }
