@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Toolbar } from "./components/Toolbar";
 import { EditorPane } from "./components/EditorPane";
-import { DiffViewer } from "./components/DiffViewer";
 import { OutputConsole } from "./components/OutputConsole";
 import { ExamplesModal } from "./components/ExamplesModal";
 import { ShortcutsModal } from "./components/ShortcutsModal";
@@ -22,6 +21,7 @@ import {
 import type {
   CodeExample,
   CompilerAvailability,
+  CompilerStandard,
   ConversionDiagnostic,
   ConversionMode,
   EditorTheme,
@@ -79,14 +79,10 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<EditorTheme>(
     savedWorkspace?.theme ?? "dark"
   );
-  const [isSwappedPanels, setIsSwappedPanels] = useState<boolean>(
-    savedWorkspace?.isSwappedPanels ?? false
-  );
   const [splitRatioPercent, setSplitRatioPercent] = useState<number>(
     savedWorkspace?.splitRatioPercent ?? 50
   );
 
-  const [isDiffViewOpen, setIsDiffViewOpen] = useState<boolean>(false);
   const [isExamplesModalOpen, setIsExamplesModalOpen] = useState<boolean>(false);
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState<boolean>(false);
   const [premadeExamples, setPremadeExamples] = useState<CodeExample[]>([]);
@@ -120,6 +116,9 @@ export const App: React.FC = () => {
   const [activeSourceLineNumber, setActiveSourceLineNumber] = useState<number>(1);
   const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>(
     savedWorkspace?.executionProvider ?? "local"
+  );
+  const [compilerStandard, setCompilerStandard] = useState<CompilerStandard>(
+    savedWorkspace?.compilerStandard ?? (sourceLanguage === "c" ? "c11" : "cpp17")
   );
   const [compilerAvailability, setCompilerAvailability] = useState<CompilerAvailability | null>(
     null
@@ -304,9 +303,9 @@ export const App: React.FC = () => {
       isRustManuallyEdited,
       stdinInput,
       theme,
-      isSwappedPanels,
       splitRatioPercent,
       executionProvider,
+      compilerStandard,
       savedAtTimestamp: new Date().toISOString()
     });
     setSaveStatusMessage("Saved!");
@@ -319,9 +318,9 @@ export const App: React.FC = () => {
     isRustManuallyEdited,
     stdinInput,
     theme,
-    isSwappedPanels,
     splitRatioPercent,
-    executionProvider
+    executionProvider,
+    compilerStandard
   ]);
 
   const handleExecute = useCallback(
@@ -340,7 +339,8 @@ export const App: React.FC = () => {
           language,
           mode,
           stdinInput,
-          executionProvider
+          executionProvider,
+          language === "c" || language === "cpp" ? compilerStandard : undefined
         );
         setExecutionResult(result);
       } catch (error: unknown) {
@@ -370,7 +370,7 @@ export const App: React.FC = () => {
         setIsExecuting(false);
       }
     },
-    [rustCode, sourceCode, stdinInput, executionProvider]
+    [rustCode, sourceCode, stdinInput, executionProvider, compilerStandard]
   );
 
   useEffect(() => {
@@ -392,12 +392,6 @@ export const App: React.FC = () => {
       } else if (event.key.toLowerCase() === "s") {
         event.preventDefault();
         handleSaveWorkspace();
-      } else if (event.key === "\\") {
-        event.preventDefault();
-        setIsSwappedPanels((previous) => !previous);
-      } else if (event.key.toLowerCase() === "d") {
-        event.preventDefault();
-        setIsDiffViewOpen((previous) => !previous);
       }
     };
 
@@ -557,9 +551,6 @@ export const App: React.FC = () => {
     />
   );
 
-  const leftPane = isSwappedPanels ? rustEditorPane : sourceEditorPane;
-  const rightPane = isSwappedPanels ? sourceEditorPane : rustEditorPane;
-
   return (
     <div className={`studio-shell theme-${theme}`} data-testid="studio-shell">
       <Toolbar
@@ -572,13 +563,11 @@ export const App: React.FC = () => {
         onConvertNow={handleConvertNow}
         executionProvider={executionProvider}
         onExecutionProviderChange={setExecutionProvider}
+        compilerStandard={compilerStandard}
+        onCompilerStandardChange={setCompilerStandard}
         compilerAvailability={compilerAvailability}
         theme={theme}
         onThemeChange={setTheme}
-        isDiffViewOpen={isDiffViewOpen}
-        onToggleDiffView={() => setIsDiffViewOpen((previous) => !previous)}
-        isSwappedPanels={isSwappedPanels}
-        onSwapPanels={() => setIsSwappedPanels((previous) => !previous)}
         isRustManuallyEdited={isRustManuallyEdited}
         onForceResyncRust={handleForceResyncRust}
         onFormatRust={handleFormatRust}
@@ -596,17 +585,9 @@ export const App: React.FC = () => {
       />
 
       <main className="studio-main">
-        {isDiffViewOpen ? (
-          <DiffViewer
-            leftTitle="Auto-Generated Rust"
-            rightTitle="Current Rust Editor"
-            leftText={lastGeneratedRustCode}
-            rightText={rustCode}
-          />
-        ) : (
           <div className="split-workspace" ref={splitContainerRef}>
             <div className="split-pane" style={{ width: `${splitRatioPercent}%` }}>
-              {leftPane}
+              {sourceEditorPane}
             </div>
             <div
               className="split-divider"
@@ -620,10 +601,9 @@ export const App: React.FC = () => {
               className="split-pane"
               style={{ width: `${100 - splitRatioPercent}%` }}
             >
-              {rightPane}
+              {rustEditorPane}
             </div>
           </div>
-        )}
 
         <OutputConsole
           stdinInput={stdinInput}

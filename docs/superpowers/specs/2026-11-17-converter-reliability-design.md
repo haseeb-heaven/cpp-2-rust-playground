@@ -12,9 +12,13 @@ C11 slab-backed LRU cache with WAL persistence.
 - Treat C and C++ as separate supported source languages.
 - Preserve **Faithful Rust** as raw output from the selected external engine or
   built-in fallback. It must never receive idiomatic cleanup passes.
-- Produce **Idiomatic Rust** only as a verified post-processing result. If the
-  result fails `rustc` verification, return the faithful code instead and add a
-  diagnostic explaining that idiomatic processing was rejected.
+- Produce **Idiomatic Rust** as a readable, conservative, compiler-verified
+  post-processing view of the exact c2rust/cpp2rust output. It may remove
+  redundant boilerplate, normalize obvious ownership/collection idioms, and
+  format code, but it must not become a separate handwritten translation path
+  or reinterpret source C/C++. If the result fails `rustc` verification, return
+  the faithful code instead and add a diagnostic explaining that idiomatic
+  processing was rejected.
 - Ensure the selected output style reaches the conversion API for initial
   conversion, manual conversion, live conversion, and style changes.
 - Preserve user-authored Rust: changing style may refresh generated output but
@@ -42,6 +46,11 @@ The existing built-in translator remains a clearly labeled degraded fallback
 only when its corresponding backbone executable is absent or fails. This work
 does not replace, fork, or attempt to reimplement either upstream compiler
 front end.
+
+Faithful mode displays the upstream output unchanged. Idiomatic mode starts
+from that same output and applies only semantics-preserving cleanup passes that
+are accepted by `rustc`; it is specifically intended to make c2rust/cpp2rust
+output easier for a human to read.
 
 The UI switches displayed generated Rust from API-returned variants only. A
 mode switch triggers a conversion with the newly chosen style rather than

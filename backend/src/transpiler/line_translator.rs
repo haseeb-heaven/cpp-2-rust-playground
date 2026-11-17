@@ -53,10 +53,10 @@ static DESIGNATED_FIELD_VALUE_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*,?\s*$"#).unwrap()
 });
 static FUNCTION_DECL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:<>,\s*&]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?\{\s*$"#).unwrap()
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:<>,\s*&]*?)(?:\s+|\s*(\*+)\s*)([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?\{\s*$"#).unwrap()
 });
 static FUNCTION_PROTOTYPE_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:<>,\s*&]*?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?;\s*$"#).unwrap()
+    Regex::new(r#"^([A-Za-z_][A-Za-z0-9_:<>,\s*&]*?)(?:\s+|\s*(\*+)\s*)([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?;\s*$"#).unwrap()
 });
 static SINGLE_LINE_IF_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^if\s*\((.+)\)\s+(.+;)\s*$"#).unwrap()
@@ -81,6 +81,9 @@ static FOR_RANGE_UP_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 static FOR_RANGE_DOWN_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^for\s*\(\s*(?:int|size_t|long|auto)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);\s*[A-Za-z_][A-Za-z0-9_]*\s*(>=|>)\s*([^;]+);\s*[^)]*--\s*\)\s*\{\s*$"#).unwrap()
+});
+static FOR_EACH_INLINE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^for\s*\(\s*(const\s+auto&|auto&|auto|[A-Za-z_][A-Za-z0-9_:<>]*&?)\s+(?:\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\]|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*([^)]+)\)\s*(?:\{\s*(.+?)\s*\}|([^{].*?;\s*))$"#).unwrap()
 });
 static FOR_EACH_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^for\s*\(\s*(const\s+auto&|auto&|auto|[A-Za-z_][A-Za-z0-9_:<>]*&?)\s+(?:\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\]|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*([^)]+)\)\s*\{\s*$"#).unwrap()
@@ -107,6 +110,12 @@ static VEC_ERASE_REMOVE_IF_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 static STD_ERASE_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^(?:std::)?erase\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*(.+?)\s*\)\s*;\s*$"#).unwrap()
+});
+static STD_REPLACE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:std::)?replace\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*,\s*([^,]+)\s*,\s*([^)]+)\)\s*;\s*$"#).unwrap()
+});
+static STATIC_ASSERT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"^(?:_Static_assert|static_assert)\s*\((.+)\)\s*;\s*$"#).unwrap()
 });
 static VEC_ERASE_UNIQUE_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"^([A-Za-z_][A-Za-z0-9_]*)\.erase\s*\(\s*(?:std::)?unique\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.c?begin\(\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.c?end\(\)\s*\)\s*;\s*$"#).unwrap()
@@ -637,7 +646,7 @@ where
     result
 }
 
-fn split_trailing_line_comment(line: &str) -> (&str, Option<&str>) {
+pub(crate) fn split_trailing_line_comment(line: &str) -> (&str, Option<&str>) {
     let bytes = line.as_bytes();
     let mut in_double_quotes = false;
     let mut in_single_quotes = false;
@@ -788,6 +797,24 @@ fn translate_ternary_outside_strings(segment: &str) -> String {
     segment.to_string()
 }
 
+fn is_byte_offset_inside_quotes(s: &str, offset: usize) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_quotes = false;
+    let mut prev_escape = false;
+    for &b in &bytes[..offset] {
+        if in_quotes {
+            if b == b'"' && !prev_escape {
+                in_quotes = false;
+            }
+            prev_escape = b == b'\\' && !prev_escape;
+        } else if b == b'"' {
+            in_quotes = true;
+            prev_escape = false;
+        }
+    }
+    in_quotes
+}
+
 fn adjust_reference_calls(input: &str, state: &TranslatorState) -> String {
     if state.function_ref_params.is_empty() {
         return input.to_string();
@@ -806,6 +833,11 @@ fn adjust_reference_calls(input: &str, state: &TranslatorState) -> String {
         while let Some(found) = call_prefix_regex.find(&output[cursor..]) {
             let match_start = cursor + found.start();
             let open_paren_end = cursor + found.end();
+            if is_byte_offset_inside_quotes(&output, match_start) {
+                rebuilt.push_str(&output[cursor..open_paren_end]);
+                cursor = open_paren_end;
+                continue;
+            }
             rebuilt.push_str(&output[cursor..open_paren_end]);
 
             let mut depth = 1usize;
@@ -932,6 +964,21 @@ where
 
 pub fn translate_expression_with_state(expression: &str, state: &TranslatorState) -> String {
     let mut output = expression.trim().to_string();
+    // `sizeof(array) / sizeof(array[0])` is C's generic array-length idiom.
+    // Preserve its intent before translating individual `sizeof` expressions.
+    let array_length_regex = Regex::new(
+        r"sizeof\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*/\s*sizeof\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*0\s*\]\s*\)",
+    )
+    .unwrap();
+    output = replace_outside_strings_with_regex(&output, &array_length_regex, |captures| {
+        let array_name = captures.get(1).unwrap().as_str();
+        let element_array_name = captures.get(2).unwrap().as_str();
+        if array_name == element_array_name {
+            format!("{}.len()", array_name)
+        } else {
+            captures.get(0).unwrap().as_str().to_string()
+        }
+    });
 
     for ptr_var in &state.char_ptr_iter_variables {
         let escaped = regex::escape(ptr_var);
@@ -1014,6 +1061,11 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
 
     output = transform_outside_string_literals(&output, |segment| {
         let mut replaced = segment.to_string();
+        for slice_var in &state.str_slice_variables {
+            if let Ok(re) = Regex::new(&format!(r"\b{}\.(?:c_str|as_str)\(\)", regex::escape(slice_var))) {
+                replaced = re.replace_all(&replaced, slice_var.as_str()).to_string();
+            }
+        }
         for (ptr_name, array_name) in &state.array_ptr_aliases {
             let ptr_offset_regex = Regex::new(&format!(
                 r"\(\s*{}\s*\+\s*([^)]+)\s*\)\s*(?:->|\.)\s*([A-Za-z_][A-Za-z0-9_]*)",
@@ -1359,6 +1411,42 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
         }
     });
 
+    let count_zero_regex = Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\.count\(([^)]+)\)\s*==\s*0\b").unwrap();
+    output = count_zero_regex
+        .replace_all(&output, |captures: &regex::Captures| {
+            let receiver = captures.get(1).unwrap().as_str();
+            let argument = captures.get(2).unwrap().as_str().trim();
+            let arg_ref = if argument.starts_with('"') || argument.starts_with('&') {
+                argument.to_string()
+            } else {
+                format!("&{}", argument)
+            };
+            if state.hashset_variables.contains(receiver) {
+                format!("!{}.contains({})", receiver, arg_ref)
+            } else {
+                format!("!{}.contains_key({})", receiver, arg_ref)
+            }
+        })
+        .to_string();
+
+    let count_pos_regex = Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\.count\(([^)]+)\)\s*(?:>\s*0\b|!=\s*0\b|==\s*1\b)").unwrap();
+    output = count_pos_regex
+        .replace_all(&output, |captures: &regex::Captures| {
+            let receiver = captures.get(1).unwrap().as_str();
+            let argument = captures.get(2).unwrap().as_str().trim();
+            let arg_ref = if argument.starts_with('"') || argument.starts_with('&') {
+                argument.to_string()
+            } else {
+                format!("&{}", argument)
+            };
+            if state.hashset_variables.contains(receiver) {
+                format!("{}.contains({})", receiver, arg_ref)
+            } else {
+                format!("{}.contains_key({})", receiver, arg_ref)
+            }
+        })
+        .to_string();
+
     let count_regex = Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\.count\(([^)]+)\)").unwrap();
     output = count_regex
         .replace_all(&output, |captures: &regex::Captures| {
@@ -1634,9 +1722,7 @@ pub fn translate_expression_with_state(expression: &str, state: &TranslatorState
             .to_string()
     });
 
-    output = transform_outside_string_literals(&output, |segment| {
-        adjust_reference_calls(segment, state)
-    });
+    output = adjust_reference_calls(&output, state);
 
     output
 }
@@ -1693,9 +1779,21 @@ fn translate_parameters(raw_parameters: &str, state: &mut TranslatorState) -> St
                 .trim()
                 .to_string();
             let mut rust_type = map_cpp_type_to_rust(&raw_type, state);
+            let normalized_base_type = raw_type
+                .replace("const", "")
+                .replace("volatile", "")
+                .replace('&', "")
+                .replace('*', "")
+                .trim()
+                .to_string();
+            let is_string_type = normalized_base_type == "string" || normalized_base_type == "std::string";
             let is_char_ptr = raw_type.contains("char*") || raw_type.contains("char *");
-            if is_char_ptr && rust_type == "String" {
+            let is_const_string_ref = is_string_type
+                && parameter.contains('&')
+                && parameter.contains("const");
+            if is_const_string_ref || (is_char_ptr && rust_type == "String") {
                 rust_type = "&str".to_string();
+                state.str_slice_variables.insert(parameter_name.to_string());
             }
             state
                 .method_parameter_names
@@ -1753,11 +1851,12 @@ fn translate_cout_statement(trimmed: &str, state: &TranslatorState) -> Option<St
             has_newline = true;
         } else if part.starts_with('"') && part.ends_with('"') && part.len() >= 2 {
             let literal = &part[1..part.len() - 1];
-            if let Some(stripped) = literal.strip_suffix("\\n") {
+            let escaped_literal = literal.replace('{', "{{").replace('}', "}}");
+            if let Some(stripped) = escaped_literal.strip_suffix("\\n") {
                 has_newline = true;
                 format_placeholders.push(stripped.to_string());
             } else {
-                format_placeholders.push(literal.to_string());
+                format_placeholders.push(escaped_literal);
             }
         } else {
             format_placeholders.push("{}".to_string());
@@ -1792,6 +1891,7 @@ fn translate_printf_statement(
     }
 
     converted_format = converted_format.replace("%%", "__RUSTC_PCT__");
+    converted_format = converted_format.replace('{', "{{").replace('}', "}}");
     let specifier_regex =
         Regex::new(r"%(?:[-+0 #])*(?:\d+|\*)?(?:\.(\d+))?(?:hh|h|ll|l|L|z|j|t)?([diuoxXfFeEgGcsp])")
             .unwrap();
@@ -2066,6 +2166,14 @@ fn translate_single_line_core(
         return format!("{}// [Preprocessor] {}", leading_whitespace, trimmed);
     }
 
+    if let Some(captures) = STATIC_ASSERT_REGEX.captures(trimmed) {
+        return format!(
+            "{}// static_assert({});",
+            leading_whitespace,
+            captures.get(1).unwrap().as_str().trim()
+        );
+    }
+
     if let Some(captures) = TEMPLATE_REGEX.captures(trimmed) {
         let generic_name = captures.get(1).unwrap().as_str().to_string();
         state.pending_generic = Some(generic_name);
@@ -2277,9 +2385,13 @@ fn translate_single_line_core(
 
     if state.inside_struct_name.is_some() && !state.inside_inline_method {
         if let Some(captures) = FUNCTION_DECL_REGEX.captures(trimmed) {
-            let return_type_raw = captures.get(1).unwrap().as_str();
-            let function_name = captures.get(2).unwrap().as_str();
-            let params_raw = captures.get(3).unwrap().as_str();
+            let return_type_raw = format!(
+                "{}{}",
+                captures.get(1).unwrap().as_str(),
+                captures.get(2).map_or("", |m| m.as_str())
+            );
+            let function_name = captures.get(3).unwrap().as_str();
+            let params_raw = captures.get(4).unwrap().as_str();
             state.reset_function_local_tracking();
             let rust_params = translate_parameters(params_raw, state);
             let self_param = if rust_params.is_empty() {
@@ -2287,7 +2399,12 @@ fn translate_single_line_core(
             } else {
                 format!("&self, {}", rust_params)
             };
-            let return_type = map_cpp_type_to_rust(return_type_raw, state);
+            let cleaned_return_raw = Regex::new(r"\b(static|inline|extern|__attribute__\s*\(\([^)]*\)\))\b")
+                .unwrap()
+                .replace_all(&return_type_raw, "")
+                .trim()
+                .to_string();
+            let return_type = map_cpp_type_to_rust(&cleaned_return_raw, state);
             let return_clause = if return_type == "()" {
                 String::new()
             } else {
@@ -2507,10 +2624,15 @@ fn translate_single_line_core(
             }
         }
         if let Some(captures) = FUNCTION_PROTOTYPE_REGEX.captures(trimmed) {
-            let return_type_raw = captures.get(1).unwrap().as_str().trim();
-            let function_name = captures.get(2).unwrap().as_str();
-            let params_raw = captures.get(3).unwrap().as_str();
-            if !matches!(return_type_raw, "return" | "delete" | "throw") && !trimmed.contains('=') {
+            let return_type_raw = format!(
+                "{}{}",
+                captures.get(1).unwrap().as_str(),
+                captures.get(2).map_or("", |m| m.as_str())
+            );
+            let function_name = captures.get(3).unwrap().as_str();
+            let params_raw = captures.get(4).unwrap().as_str();
+            let return_type_trimmed = return_type_raw.trim();
+            if !matches!(return_type_trimmed, "return" | "delete" | "throw") && !trimmed.contains('=') {
                 let ref_modes = compute_function_ref_modes(params_raw);
                 state
                     .function_ref_params
@@ -2617,9 +2739,13 @@ fn translate_single_line_core(
     }
 
     if let Some(captures) = FUNCTION_DECL_REGEX.captures(trimmed) {
-        let return_type_raw = captures.get(1).unwrap().as_str();
-        let function_name = captures.get(2).unwrap().as_str();
-        let params_raw = captures.get(3).unwrap().as_str();
+        let return_type_raw = format!(
+            "{}{}",
+            captures.get(1).unwrap().as_str(),
+            captures.get(2).map_or("", |m| m.as_str())
+        );
+        let function_name = captures.get(3).unwrap().as_str();
+        let params_raw = captures.get(4).unwrap().as_str();
 
         let generic_clause = state
             .pending_generic
@@ -2648,7 +2774,12 @@ fn translate_single_line_core(
                 leading_whitespace, function_name
             );
         }
-        let return_type = map_cpp_type_to_rust(return_type_raw, state);
+        let cleaned_return_raw = Regex::new(r"\b(static|inline|extern|__attribute__\s*\(\([^)]*\)\))\b")
+            .unwrap()
+            .replace_all(&return_type_raw, "")
+            .trim()
+            .to_string();
+        let return_type = map_cpp_type_to_rust(&cleaned_return_raw, state);
         state.current_function_returns_option = return_type.starts_with("Option<");
         if state.current_function_returns_option {
             state.option_functions.insert(function_name.to_string());
@@ -3034,6 +3165,31 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!("{}.retain(|&_x| _x != {});", vec_name, val_expr);
     }
 
+    if let Some(captures) = STD_REPLACE_REGEX.captures(trimmed) {
+        let vec_name = captures.get(1).unwrap().as_str();
+        let old_val = captures.get(2).unwrap().as_str().trim();
+        let new_val = captures.get(3).unwrap().as_str().trim();
+        if state.string_variables.contains(vec_name) || state.str_slice_variables.contains(vec_name) {
+            let old_expr = translate_expression_with_state(old_val, state);
+            let new_expr = translate_expression_with_state(new_val, state);
+            return format!("{} = {}.replace({}, {});", vec_name, vec_name, old_expr, new_expr);
+        }
+        let old_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(old_val, state)
+        } else {
+            translate_expression_with_state(old_val, state)
+        };
+        let new_expr = if state.float_vector_variables.contains(vec_name) {
+            coerce_arg_for_float_vec(new_val, state)
+        } else {
+            translate_expression_with_state(new_val, state)
+        };
+        return format!(
+            "{{ let _target = {}; let _replacement = {}; for _x in &mut {} {{ if *_x == _target {{ *_x = _replacement.clone(); }} }} }}",
+            old_expr, new_expr, vec_name
+        );
+    }
+
     if let Some(captures) = VEC_ERASE_UNIQUE_REGEX.captures(trimmed) {
         let vec_name = captures.get(1).unwrap().as_str();
         return format!(
@@ -3321,6 +3477,74 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
         return format!(
             "for {} in {}{}{} {{",
             variable_name, start_expr, range_operator, end_expr
+        );
+    }
+
+    if let Some(captures) = FOR_EACH_INLINE_REGEX.captures(trimmed) {
+        let binding_type = captures.get(1).unwrap().as_str().trim();
+        let collection_expr =
+            translate_expression_with_state(captures.get(5).unwrap().as_str(), state);
+        let raw_body = captures
+            .get(6)
+            .or_else(|| captures.get(7))
+            .unwrap()
+            .as_str()
+            .trim();
+        let is_structured_binding = captures.get(2).is_some();
+        let iter_source = if is_structured_binding {
+            if binding_type.contains('&') && !binding_type.contains("const") {
+                format!("&mut {}", collection_expr)
+            } else {
+                format!("&{}", collection_expr)
+            }
+        } else if binding_type.contains('&') && !binding_type.contains("const") {
+            format!("&mut {}", collection_expr)
+        } else {
+            format!("{}.iter().cloned()", collection_expr)
+        };
+        let loop_header = if let (Some(k), Some(v)) = (captures.get(2), captures.get(3)) {
+            let key_name = k.as_str();
+            let val_name = v.as_str();
+            state.declared_variables.insert(key_name.to_string());
+            state.declared_variables.insert(val_name.to_string());
+            format!("({}, {})", key_name, val_name)
+        } else {
+            let item_name = captures.get(4).unwrap().as_str();
+            state.declared_variables.insert(item_name.to_string());
+            item_name.to_string()
+        };
+        let mut translated_body = translate_single_line(raw_body, state);
+        let is_mut_ref = !is_structured_binding && binding_type.contains('&') && !binding_type.contains("const");
+        let item_esc = regex::escape(&loop_header);
+        let mut final_header = loop_header;
+        if is_mut_ref {
+            if let Ok(assign_re) = Regex::new(&format!(r"^\s*{}\s*([+\-*/%]?=)", item_esc)) {
+                translated_body = assign_re
+                    .replace(&translated_body, |caps: &regex::Captures| {
+                        format!("*{} {}", final_header, &caps[1])
+                    })
+                    .to_string();
+            }
+            if let Ok(inc_re) = Regex::new(&format!(r"^\s*{}\s*(\+\+|\-\-)\s*;", item_esc)) {
+                translated_body = inc_re
+                    .replace(&translated_body, |caps: &regex::Captures| {
+                        let op = if &caps[1] == "++" { "+= 1" } else { "-= 1" };
+                        format!("*{} {};", final_header, op)
+                    })
+                    .to_string();
+            }
+        } else if !is_structured_binding {
+            if let Ok(modify_re) = Regex::new(&format!(r"^\s*{}\s*([+\-*/%]?=|\+\+|\-\-)", item_esc)) {
+                if modify_re.is_match(&translated_body) {
+                    final_header = format!("mut {}", final_header);
+                }
+            }
+        }
+        return format!(
+            "for {} in {} {{\n    {}\n}}",
+            final_header,
+            iter_source,
+            translated_body.trim()
         );
     }
 

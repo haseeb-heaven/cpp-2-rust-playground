@@ -113,21 +113,11 @@ describe("App component", () => {
     expect(screen.getByTestId("output-console")).toBeInTheDocument();
     expect(screen.getByTestId("run-source-button")).toBeInTheDocument();
     expect(screen.getByTestId("run-rust-button")).toBeInTheDocument();
+    expect(screen.getByTestId("execution-mode-select")).toBeInTheDocument();
+    expect(screen.getByTestId("compiler-standard-select")).toBeInTheDocument();
+    expect(screen.getByTestId("save-menu-button")).toBeInTheDocument();
     expect(screen.queryByTestId("compile-source-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("compile-rust-button")).not.toBeInTheDocument();
-  });
-
-  it("toggles Diff View and swaps panels", () => {
-    render(<App />);
-    const diffButton = screen.getByTestId("diff-toggle-button");
-    fireEvent.click(diffButton);
-    expect(screen.getByTestId("diff-viewer")).toBeInTheDocument();
-    fireEvent.click(diffButton);
-    expect(screen.queryByTestId("diff-viewer")).not.toBeInTheDocument();
-
-    const swapButton = screen.getByTestId("swap-panels-button");
-    fireEvent.click(swapButton);
-    expect(screen.getByTestId("studio-shell")).toBeInTheDocument();
   });
 
   it("executes Rust code and displays output in console", async () => {

@@ -84,10 +84,11 @@ async fn convert_endpoint_translates_cpp_to_rust() {
     if parsed["usedFallback"] == Value::Bool(true) {
         assert!(rust_code.contains("fn main() {"));
         assert!(rust_code.contains("println!(\"Hi\");"));
-        assert!(parsed["transpilerEngine"]
-            .as_str()
-            .unwrap()
-            .contains("Built-in Regex C++ Fallback"));
+        let engine = parsed["transpilerEngine"].as_str().unwrap();
+        assert!(
+            engine.contains("Built-in Regex C++ Fallback")
+                || engine.contains("Built-in Readable Idiomatic Projection")
+        );
     } else {
         assert!(parsed["transpilerEngine"]
             .as_str()
@@ -171,7 +172,8 @@ async fn execute_endpoint_uses_local_compiler_when_local_provider_selected() {
         "language": "rust",
         "mode": "run",
         "stdinInput": "",
-        "provider": "local"
+"provider": "local",
+"compilerStandard": "c11"
     });
 
     let response = app

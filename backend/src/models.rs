@@ -31,6 +31,40 @@ pub enum ExecutionProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+pub enum CompilerStandard {
+    C11,
+    C17,
+    Gnu11,
+    Cpp14,
+    Cpp17,
+    Cpp20,
+    Cpp23,
+}
+
+impl CompilerStandard {
+    pub fn as_flag(&self) -> &'static str {
+        match self {
+            Self::C11 => "-std=c11",
+            Self::C17 => "-std=c17",
+            Self::Gnu11 => "-std=gnu11",
+            Self::Cpp14 => "-std=c++14",
+            Self::Cpp17 => "-std=c++17",
+            Self::Cpp20 => "-std=c++20",
+            Self::Cpp23 => "-std=c++23",
+        }
+    }
+
+    pub fn supports(&self, language: &ExecutionLanguage) -> bool {
+        matches!(
+            (self, language),
+            (Self::C11 | Self::C17 | Self::Gnu11, ExecutionLanguage::C)
+                | (Self::Cpp14 | Self::Cpp17 | Self::Cpp20 | Self::Cpp23, ExecutionLanguage::Cpp)
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
@@ -138,6 +172,8 @@ pub struct ExecutionRequest {
     pub stdin_input: String,
     #[serde(default)]
     pub provider: Option<ExecutionProvider>,
+    #[serde(default)]
+    pub compiler_standard: Option<CompilerStandard>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

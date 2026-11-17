@@ -3,6 +3,7 @@ import type {
   CompilerAvailability,
   ConversionResponse,
   ExecutionLanguage,
+  CompilerStandard,
   ExecutionMode,
   ExecutionProvider,
   ExecutionResponse,
@@ -37,12 +38,13 @@ export async function executeProgramCode(
   language: ExecutionLanguage,
   mode: ExecutionMode,
   stdinInput: string,
-  provider: ExecutionProvider
+  provider: ExecutionProvider,
+  compilerStandard?: CompilerStandard
 ): Promise<ExecutionResponse> {
   const response = await fetch(`${API_BASE_URL}/api/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, language, mode, stdinInput, provider })
+    body: JSON.stringify({ code, language, mode, stdinInput, provider, compilerStandard })
   });
 
   if (!response.ok) {

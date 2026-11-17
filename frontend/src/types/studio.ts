@@ -2,6 +2,14 @@ export type SourceLanguage = "c" | "cpp";
 export type ExecutionLanguage = "c" | "cpp" | "rust";
 export type ExecutionMode = "compile" | "run";
 export type ExecutionProvider = "local" | "online";
+export type CompilerStandard =
+  | "c11"
+  | "c17"
+  | "gnu11"
+  | "cpp14"
+  | "cpp17"
+  | "cpp20"
+  | "cpp23";
 export type ConversionMode = "live" | "manual";
 export type RustOutputStyle = "faithful" | "idiomatic";
 export type EditorTheme = "dark" | "light" | "midnight";
@@ -113,8 +121,9 @@ export interface SavedWorkspaceState {
   isRustManuallyEdited: boolean;
   stdinInput: string;
   theme: EditorTheme;
-  isSwappedPanels: boolean;
+  isSwappedPanels?: boolean;
   splitRatioPercent: number;
   executionProvider?: ExecutionProvider;
+  compilerStandard?: CompilerStandard;
   savedAtTimestamp: string;
 }

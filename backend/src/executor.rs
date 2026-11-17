@@ -357,11 +357,25 @@ async fn execute_locally(
         .env_remove("JDOODLE_CLIENT_SECRET");
     match request.language {
         ExecutionLanguage::C => {
+            if let Some(standard) = request
+                .compiler_standard
+                .as_ref()
+                .filter(|standard| standard.supports(&ExecutionLanguage::C))
+            {
+                compile_command.arg(standard.as_flag());
+            } else {
+                compile_command.arg("-std=c11");
+            }
             compile_command.arg(&source_path).arg("-o").arg(&binary_path);
         }
         ExecutionLanguage::Cpp => {
+            let standard = request
+                .compiler_standard
+                .as_ref()
+                .filter(|standard| standard.supports(&ExecutionLanguage::Cpp))
+                .map_or("-std=c++17", crate::models::CompilerStandard::as_flag);
             compile_command
-                .arg("-std=c++17")
+                .arg(standard)
                 .arg(&source_path)
                 .arg("-o")
                 .arg(&binary_path);
@@ -778,6 +792,7 @@ mod tests {
             mode: ExecutionMode::Run,
             stdin_input: String::new(),
             provider: Some(ExecutionProvider::Local),
+        compiler_standard: None,
         };
 
         let response = execute_program(&configuration, &request).await;
@@ -807,6 +822,7 @@ mod tests {
                     mode: ExecutionMode::Run,
                     stdin_input: String::new(),
                     provider: Some(ExecutionProvider::Local),
+                compiler_standard: None,
                 },
             )
             .await;
@@ -825,6 +841,7 @@ mod tests {
                     mode: ExecutionMode::Run,
                     stdin_input: String::new(),
                     provider: Some(ExecutionProvider::Local),
+                compiler_standard: None,
                 },
             )
             .await;

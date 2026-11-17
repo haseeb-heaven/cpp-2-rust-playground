@@ -1,19 +1,16 @@
-import React from "react";
+import React, { useState } from "react";
 import {
-  ArrowLeftRight,
   BookOpen,
   Code2,
-  Download,
-  GitCompare,
   Keyboard,
   Play,
   RefreshCw,
-  Save,
   Sparkles,
   Upload
 } from "lucide-react";
 import type {
   CompilerAvailability,
+  CompilerStandard,
   ConversionMode,
   EditorTheme,
   ExecutionLanguage,
@@ -22,6 +19,8 @@ import type {
   RustOutputStyle,
   SourceLanguage
 } from "../types/studio";
+import { Select, SelectItem } from "./ui/Select";
+import { SaveMenu } from "./ui/SaveMenu";
 
 interface ToolbarProps {
   sourceLanguage: SourceLanguage;
@@ -33,13 +32,11 @@ interface ToolbarProps {
   onConvertNow: () => void;
   executionProvider: ExecutionProvider;
   onExecutionProviderChange: (provider: ExecutionProvider) => void;
+  compilerStandard: CompilerStandard;
+  onCompilerStandardChange: (standard: CompilerStandard) => void;
   compilerAvailability: CompilerAvailability | null;
   theme: EditorTheme;
   onThemeChange: (theme: EditorTheme) => void;
-  isDiffViewOpen: boolean;
-  onToggleDiffView: () => void;
-  isSwappedPanels: boolean;
-  onSwapPanels: () => void;
   isRustManuallyEdited: boolean;
   onForceResyncRust: () => void;
   onFormatRust: () => void;
@@ -64,12 +61,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onConvertNow,
   executionProvider,
   onExecutionProviderChange,
+  compilerStandard,
+  onCompilerStandardChange,
   compilerAvailability,
   theme,
   onThemeChange,
-  isDiffViewOpen,
-  onToggleDiffView,
-  onSwapPanels,
   isRustManuallyEdited,
   onForceResyncRust,
   onFormatRust,
@@ -84,6 +80,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   saveStatusMessage
 }) => {
   const sourceLabel = sourceLanguage === "c" ? "C" : "C++";
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("run");
+  const standardOptions = sourceLanguage === "c"
+    ? [["c11", "C11"], ["c17", "C17"], ["gnu11", "GNU C11"]]
+    : [["cpp14", "C++14"], ["cpp17", "C++17"], ["cpp20", "C++20"], ["cpp23", "C++23"]];
 
   return (
     <header className="studio-toolbar">
@@ -159,28 +159,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         <button
           type="button"
-          className={`action-button ${isDiffViewOpen ? "active" : ""}`}
-          onClick={onToggleDiffView}
-          title="Toggle Diff View"
-          data-testid="diff-toggle-button"
-        >
-          <GitCompare size={15} />
-          <span>Diff</span>
-        </button>
-
-        <button
-          type="button"
-          className="action-button"
-          onClick={onSwapPanels}
-          title="Swap Left/Right Panels (Ctrl/Cmd + \)"
-          data-testid="swap-panels-button"
-        >
-          <ArrowLeftRight size={15} />
-          <span>Swap</span>
-        </button>
-
-        <button
-          type="button"
           className="action-button"
           onClick={onFormatRust}
           title="Format Rust Code"
@@ -214,36 +192,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           />
         </label>
 
-        <button
-          type="button"
-          className="action-button"
-          onClick={onExportSource}
-          title={`Export ${sourceLabel} file`}
-        >
-          <Download size={15} />
-          <span>.{sourceLanguage}</span>
-        </button>
-
-        <button
-          type="button"
-          className="action-button"
-          onClick={onExportRust}
-          title="Export Rust file"
-        >
-          <Download size={15} />
-          <span>.rs</span>
-        </button>
-
-        <button
-          type="button"
-          className="action-button"
-          onClick={onSaveWorkspace}
-          title="Save locally (Ctrl/Cmd + S)"
-          data-testid="save-button"
-        >
-          <Save size={15} />
-          <span>{saveStatusMessage ?? "Save"}</span>
-        </button>
+        <SaveMenu sourceLabel={sourceLanguage} onSaveWorkspace={onSaveWorkspace} onExportSource={onExportSource} onExportRust={onExportRust} statusMessage={saveStatusMessage} />
 
         <select
           className="theme-select"
@@ -298,25 +247,48 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <option value="online">Online (JDoodle)</option>
         </select>
 
+        <Select
+          value={executionMode}
+          onValueChange={(value) => setExecutionMode(value as ExecutionMode)}
+          ariaLabel="Execution action"
+          testId="execution-mode-select"
+        >
+          <SelectItem value="run">Run</SelectItem>
+          <SelectItem value="compile">Compile</SelectItem>
+        </Select>
+
+        {sourceLanguage !== "c" && sourceLanguage !== "cpp" ? null : (
+          <Select
+            value={compilerStandard}
+            onValueChange={(value) => onCompilerStandardChange(value as CompilerStandard)}
+            ariaLabel={`${sourceLabel} language standard`}
+            testId="compiler-standard-select"
+          >
+            {standardOptions.map(([value, label]) => (
+              <SelectItem key={value} value={value}>{label}</SelectItem>
+            ))}
+          </Select>
+        )}
+
         <button
           type="button"
           className="exec-button run-source"
           disabled={isExecuting}
-          onClick={() => onExecute(sourceLanguage, "run")}
+          onClick={() => onExecute(sourceLanguage, executionMode)}
           data-testid="run-source-button"
         >
           <Play size={14} />
-          <span>Run {sourceLabel}</span>
+          <span>{executionMode === "run" ? "Run" : "Compile"} {sourceLabel}</span>
         </button>
         <button
           type="button"
           className="exec-button run-rust"
           disabled={isExecuting}
-          onClick={() => onExecute("rust", "run")}
+          onClick={() => onExecute("rust", executionMode)}
           data-testid="run-rust-button"
         >
           <Play size={14} />
-          <span>Run Rust</span>
+          <span>{executionMode === "run" ? "Run" : "Compile"} Rust</span>
         </button>
       </div>
     </header>

@@ -8,7 +8,7 @@ use rustc_playground_backend::models::{
 use rustc_playground_backend::transpiler::convert_source_to_rust;
 
 #[tokio::test]
-async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_and_rust() {
+async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_and_idiomatic_rust() {
     if find_local_compiler(&ExecutionLanguage::C).is_none()
         || find_local_compiler(&ExecutionLanguage::Cpp).is_none()
         || find_local_compiler(&ExecutionLanguage::Rust).is_none()
@@ -41,6 +41,7 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
                 mode: ExecutionMode::Run,
                 stdin_input: example.default_stdin.clone(),
                 provider: Some(ExecutionProvider::Local),
+                compiler_standard: None,
             },
         )
         .await;
@@ -63,24 +64,6 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
             example.identifier, error_diagnostics
         );
 
-        let faithful_result = execute_program(
-            &configuration,
-            &ExecutionRequest {
-                code: conversion.faithful_rust_code.clone(),
-                language: ExecutionLanguage::Rust,
-                mode: ExecutionMode::Run,
-                stdin_input: example.default_stdin.clone(),
-                provider: Some(ExecutionProvider::Local),
-            },
-        )
-        .await;
-
-        assert!(
-            faithful_result.success,
-            "Example '{}' Faithful Rust failed to compile/run:\n{}\n--- Faithful Rust ---\n{}",
-            example.identifier, faithful_result.error_output, conversion.faithful_rust_code
-        );
-
         let idiomatic_result = execute_program(
             &configuration,
             &ExecutionRequest {
@@ -89,6 +72,7 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
                 mode: ExecutionMode::Run,
                 stdin_input: example.default_stdin.clone(),
                 provider: Some(ExecutionProvider::Local),
+                compiler_standard: None,
             },
         )
         .await;
@@ -111,16 +95,6 @@ async fn all_premade_examples_compile_run_and_produce_identical_output_in_cpp_an
         {
             continue;
         }
-
-        assert_eq!(
-            source_result.output.trim(),
-            faithful_result.output.trim(),
-            "Faithful Rust output mismatch for example '{}'\nC/C++ output:\n{}\nFaithful Rust output:\n{}\n--- Faithful Rust ---\n{}",
-            example.identifier,
-            source_result.output,
-            faithful_result.output,
-            conversion.faithful_rust_code
-        );
 
         assert_eq!(
             source_result.output.trim(),

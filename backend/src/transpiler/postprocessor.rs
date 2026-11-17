@@ -4,7 +4,7 @@ use crate::models::{
     ExecutionLanguage, ExecutionMode, ExecutionProvider, ExecutionRequest, PostProcessingSummary,
     SourceLanguage,
 };
-use crate::transpiler::{detect_external_transpiler_binary, workspace_root_dir, TempEngineDirectory};
+use crate::transpiler::{workspace_root_dir, TempEngineDirectory};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
@@ -83,6 +83,19 @@ pub fn rustc_extra_args_for_code(rust_code: &str) -> Vec<String> {
         ];
         args.extend(CPP2RUST_LINK_ARGS.iter().cloned());
         args
+    } else if rust_code.contains("extern \"C\"")
+        || rust_code.contains("::core::ffi")
+        || rust_code.contains("pub struct Arena")
+        || rust_code.contains("#![allow(")
+    {
+        vec![
+            "--edition".to_string(),
+            "2021".to_string(),
+            "-A".to_string(),
+            "warnings".to_string(),
+            "-W".to_string(),
+            "unused-mut".to_string(),
+        ]
     } else {
         vec!["--edition".to_string(), "2021".to_string()]
     }
@@ -119,8 +132,79 @@ static USIZE_PARAM_REGEX: Lazy<Regex> =
 static LET_MUT_DECL_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\blet\s+mut\s+([A-Za-z_][A-Za-z0-9_]*)\b").unwrap());
 
+fn contains_engine_runtime_scaffolding(code: &str) -> bool {
+    code.contains("extern crate libcc2rs")
+        || code.contains("use libcc2rs")
+        || code.contains("::core::ffi")
+        || code.contains("extern \"C\"")
+        || code.contains("Ptr::<")
+        || code.contains("Value<Vec<")
+        || code.contains("unsafe fn main_0")
+}
+
+fn simplify_cpp2rust_runtime_scaffolding(code: &str) -> (String, bool) {
+    if !code.contains("libcc2rs") || !code.contains("__cpp2rust_init_globals") {
+        return (code.to_string(), false);
+    }
+
+    let entrypoint_regex = Regex::new(
+        r"(?s)pub\s+fn\s+main\s*\(\s*\)\s*\{\s*__cpp2rust_init_globals\(\);\s*std::process::exit\(main_0\(\)\);\s*\}\s*fn\s+main_0\s*\(\s*\)\s*->\s*i32\s*\{",
+    )
+    .unwrap();
+    let stdout_regex = Regex::new(
+        r#"(?s)\{\s*let\s+mut\s+__bytes\s*=\s*Ptr::<i8>::from_string_literal\(b\"((?:[^\"\\]|\\.)*)\"\)\.to_c_u8_bytes\(\);\s*__bytes\.push\(b'\\n'\);\s*match\s+libcc2rs::c_stdout\(\)\.with_mut\(\|__f\|\s*__f\.write\(&__bytes\)\)\s*==\s*__bytes\.len\(\)\s*\{\s*true\s*=>\s*0,\s*false\s*=>\s*-1,\s*\}\s*\};"#,
+    )
+    .unwrap();
+    let init_regex = Regex::new(r"(?s)\s*pub\s+fn\s+__cpp2rust_init_globals\s*\(\s*\)\s*\{\s*\}\s*$").unwrap();
+    let final_success_regex = Regex::new(r"(?s)\s*return\s+0(?:_i32)?;\s*\}\s*$").unwrap();
+    let return_status_regex = Regex::new(r"\breturn\s+(-?\d+)_i32;").unwrap();
+
+    let mut simplified = entrypoint_regex.replace(code, "fn main() {").to_string();
+    if simplified == code {
+        return (code.to_string(), false);
+    }
+
+    simplified = stdout_regex
+        .replace_all(&simplified, |captures: &regex::Captures| {
+            format!("println!(\"{}\");", captures.get(1).unwrap().as_str())
+        })
+        .to_string();
+    simplified = init_regex.replace(&simplified, "").to_string();
+    simplified = final_success_regex.replace(&simplified, "\n}").to_string();
+    simplified = return_status_regex
+        .replace_all(&simplified, "std::process::exit($1);")
+        .to_string();
+
+    let is_runtime_import = |line: &str| {
+        matches!(
+            line.trim(),
+            "extern crate libcc2rs;"
+                | "use libcc2rs::*;"
+                | "use std::cell::RefCell;"
+                | "use std::collections::BTreeMap;"
+                | "use std::io::prelude::*;"
+                | "use std::io::{Read, Seek, Write};"
+                | "use std::os::fd::AsFd;"
+                | "use std::rc::{Rc, Weak};"
+        )
+    };
+    let code_without_runtime_imports = simplified
+        .lines()
+        .filter(|line| !is_runtime_import(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !code_without_runtime_imports.contains("libcc2rs")
+        && !code_without_runtime_imports.contains("Ptr::<")
+        && !code_without_runtime_imports.contains("__cpp2rust")
+    {
+        simplified = code_without_runtime_imports;
+    }
+
+    (simplified, true)
+}
+
 #[derive(Debug, Deserialize)]
-struct RustcDiagnosticMessage {
+pub(crate) struct RustcDiagnosticMessage {
     level: Option<String>,
     code: Option<RustcDiagnosticCode>,
     message: Option<String>,
@@ -219,7 +303,7 @@ pub fn format_with_rustfmt(code: &str) -> Option<String> {
     None
 }
 
-fn check_rustc_and_collect_diagnostics(
+pub(crate) fn check_rustc_and_collect_diagnostics(
     rust_code: &str,
 ) -> Result<Vec<RustcDiagnosticMessage>, String> {
     let Some(rustc) = find_rustc_binary() else {
@@ -275,12 +359,42 @@ fn check_rustc_and_collect_diagnostics(
     }
 }
 
+fn detect_c2rust_driver_binary() -> Option<String> {
+    let root = workspace_root_dir();
+    let mut candidates = Vec::new();
+    if let Ok(env_bin) = std::env::var("C2RUST_BIN") {
+        if !env_bin.trim().is_empty() {
+            candidates.push(env_bin.trim().to_string());
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            candidates.push(format!("{}/.cargo/bin/c2rust", home));
+        }
+    }
+    candidates.push(root.join(".tools/bin/c2rust").to_string_lossy().to_string());
+    candidates.push(".tools/bin/c2rust".to_string());
+    candidates.push("/opt/homebrew/bin/c2rust".to_string());
+    candidates.push("/usr/local/bin/c2rust".to_string());
+    candidates.push("c2rust".to_string());
+
+    candidates.into_iter().find(|candidate| {
+        Command::new(candidate)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
 fn try_external_c2rust_tools(code: &str) -> (String, Vec<String>) {
     let mut current = code.to_string();
     let mut applied = Vec::new();
 
     if current.contains("unsafe") {
-        if let Some(c2rust_bin) = detect_external_transpiler_binary(&SourceLanguage::C) {
+        if let Some(c2rust_bin) = detect_c2rust_driver_binary() {
             if let Ok(temp_dir) = TempEngineDirectory::create() {
                 let rs_path = temp_dir.path.join("input.rs");
                 if fs::write(&rs_path, &current).is_ok() {
@@ -350,12 +464,135 @@ fn try_external_c2rust_tools(code: &str) -> (String, Vec<String>) {
     (current, applied)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StringState {
+    None,
+    Normal,
+    Raw(usize), // number of hashes
+    BlockComment(usize), // nesting depth >= 1
+}
+
+fn scan_line_string_state(line: &str, mut state: StringState) -> (StringState, Option<usize>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match state {
+            StringState::BlockComment(depth) => {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    state = StringState::BlockComment(depth + 1);
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    if depth <= 1 {
+                        state = StringState::None;
+                    } else {
+                        state = StringState::BlockComment(depth - 1);
+                    }
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            StringState::Normal => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    state = StringState::None;
+                }
+                i += 1;
+            }
+            StringState::Raw(hashes) => {
+                if bytes[i] == b'"' {
+                    let mut matched_hashes = 0;
+                    while i + 1 + matched_hashes < bytes.len() && bytes[i + 1 + matched_hashes] == b'#' {
+                        matched_hashes += 1;
+                    }
+                    if matched_hashes >= hashes {
+                        state = StringState::None;
+                        i += 1 + hashes;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            StringState::None => {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    state = StringState::BlockComment(1);
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    return (StringState::None, Some(i));
+                }
+                if bytes[i] == b'r' && i + 1 < bytes.len() {
+                    let mut hash_count = 0;
+                    let mut j = i + 1;
+                    while j < bytes.len() && bytes[j] == b'#' {
+                        hash_count += 1;
+                        j += 1;
+                    }
+                    if j < bytes.len() && bytes[j] == b'"' {
+                        state = StringState::Raw(hash_count);
+                        i = j + 1;
+                        continue;
+                    }
+                }
+                if bytes[i] == b'"' {
+                    state = StringState::Normal;
+                    i += 1;
+                    continue;
+                }
+                if bytes[i] == b'\'' {
+                    i += 1;
+                    if i < bytes.len() && bytes[i] == b'\\' {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                    if i < bytes.len() && bytes[i] == b'\'' {
+                        i += 1;
+                    }
+                    continue;
+                }
+                i += 1;
+            }
+        }
+    }
+    (state, None)
+}
+
 fn strip_transpiler_boilerplate(code: &str) -> (String, bool) {
     let mut output_lines: Vec<String> = Vec::new();
     let mut changed = false;
     let mut prev_blank = false;
+    let mut string_state = StringState::None;
 
     for raw_line in code.lines() {
+        let prev_state = string_state;
+        let (next_state, comment_pos_opt) = scan_line_string_state(raw_line, string_state);
+        string_state = next_state;
+
+        if prev_state != StringState::None || next_state != StringState::None {
+            if let Some(pos) = comment_pos_opt {
+                let comment = raw_line[pos..].trim();
+                let is_pedagogical = comment.starts_with("// & borrows ")
+                    || comment.starts_with("// &mut borrows ")
+                    || comment.starts_with("// C++ erase-remove")
+                    || comment.starts_with("// Vec::insert ")
+                    || comment.starts_with("// std::replace ");
+                if is_pedagogical {
+                    changed = true;
+                    output_lines.push(raw_line[..pos].trim_end().to_string());
+                    continue;
+                }
+            }
+            output_lines.push(raw_line.to_string());
+            continue;
+        }
+
         let trimmed = raw_line.trim();
         let is_boilerplate = BOILERPLATE_EXACT_LINES.contains(&trimmed)
             || trimmed.starts_with("// #include <")
@@ -363,14 +600,32 @@ fn strip_transpiler_boilerplate(code: &str) -> (String, bool) {
             || trimmed.starts_with("// Forward declaration: ")
             || trimmed.starts_with("// Global pointer '")
             || trimmed.starts_with("// Pointer alias: ")
-            || trimmed.starts_with("// C11 _Generic macro ");
+            || trimmed.starts_with("// C11 _Generic macro ")
+            || trimmed.starts_with("// static_assert(");
 
         if is_boilerplate {
             changed = true;
             continue;
         }
 
-        let cleaned_line = raw_line.trim_end().to_string();
+        let line_without_pedagogical = if let Some(pos) = comment_pos_opt {
+            let comment = raw_line[pos..].trim();
+            let is_pedagogical = comment.starts_with("// & borrows ")
+                || comment.starts_with("// &mut borrows ")
+                || comment.starts_with("// C++ erase-remove")
+                || comment.starts_with("// Vec::insert ")
+                || comment.starts_with("// std::replace ");
+            if is_pedagogical {
+                changed = true;
+                &raw_line[..pos]
+            } else {
+                raw_line
+            }
+        } else {
+            raw_line
+        };
+
+        let cleaned_line = line_without_pedagogical.trim_end().to_string();
         if cleaned_line.is_empty() {
             if prev_blank || output_lines.is_empty() {
                 changed = true;
@@ -380,6 +635,7 @@ fn strip_transpiler_boilerplate(code: &str) -> (String, bool) {
         } else {
             prev_blank = false;
         }
+
         output_lines.push(cleaned_line);
     }
 
@@ -1078,6 +1334,22 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
 
     let mut candidate = faithful_rust.to_string();
 
+    let (cpp2rust_simplified, cpp2rust_changed) = simplify_cpp2rust_runtime_scaffolding(&candidate);
+    if cpp2rust_changed {
+        let (verified, accepted) = verify_or_rollback_transformation(
+            faithful_rust,
+            &cpp2rust_simplified,
+            "simplify_cpp2rust_runtime_scaffolding",
+            &mut summary.rejected_passes,
+        );
+        if accepted {
+            candidate = verified;
+            summary
+                .applied_passes
+                .push("simplify_cpp2rust_runtime_scaffolding".to_string());
+        }
+    }
+
     let (external_out, external_passes) = try_external_c2rust_tools(&candidate);
     if !external_passes.is_empty() {
         candidate = external_out;
@@ -1152,8 +1424,20 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 }
             }
 
-            summary.compiler_verified = true;
-            (candidate, summary)
+            if contains_engine_runtime_scaffolding(&candidate) {
+                summary.compiler_verified = false;
+                summary.verification_error = Some(
+                    "Upstream output still contains runtime/FFI scaffolding; it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
+                        .to_string(),
+                );
+                summary.rejected_passes.push(
+                    "idiomatic_cleanup (upstream runtime/FFI scaffolding remains)".to_string(),
+                );
+                (faithful_rust.to_string(), summary)
+            } else {
+                summary.compiler_verified = true;
+                (candidate, summary)
+            }
         }
         Err(candidate_err) => {
             summary.rejected_passes.push(format!(
@@ -1161,17 +1445,29 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 candidate_err
             ));
             summary.formatted_with_rustfmt = false;
+            if contains_engine_runtime_scaffolding(faithful_rust) {
+                summary.compiler_verified = false;
+                summary.verification_error = Some(
+                    "Upstream output still contains runtime/FFI scaffolding; it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
+                        .to_string(),
+                );
+                summary.rejected_passes.push(
+                    "idiomatic_cleanup (upstream runtime/FFI scaffolding remains)".to_string(),
+                );
+                return (faithful_rust.to_string(), summary);
+            }
             match check_rustc_and_collect_diagnostics(faithful_rust) {
                 Ok(_) => {
                     summary.compiler_verified = true;
                     summary.verification_error = None;
+                    (faithful_rust.to_string(), summary)
                 }
                 Err(faithful_err) => {
                     summary.compiler_verified = false;
                     summary.verification_error = Some(faithful_err);
+                    (faithful_rust.to_string(), summary)
                 }
             }
-            (faithful_rust.to_string(), summary)
         }
     }
 }
@@ -1197,6 +1493,7 @@ pub async fn verify_equivalence_against_source(
             mode: ExecutionMode::Run,
             stdin_input: stdin_input.to_string(),
             provider: Some(ExecutionProvider::Local),
+            compiler_standard: None,
         },
     )
     .await;
@@ -1209,6 +1506,7 @@ pub async fn verify_equivalence_against_source(
             mode: ExecutionMode::Run,
             stdin_input: stdin_input.to_string(),
             provider: Some(ExecutionProvider::Local),
+            compiler_standard: None,
         },
     )
     .await;
@@ -1221,6 +1519,7 @@ pub async fn verify_equivalence_against_source(
             mode: ExecutionMode::Run,
             stdin_input: stdin_input.to_string(),
             provider: Some(ExecutionProvider::Local),
+            compiler_standard: None,
         },
     )
     .await;
@@ -1265,5 +1564,74 @@ mod tests {
         assert!(out3.contains("*s = Custom;"));
         assert!(out3.contains("let mut a: Box<i32> = Box::new(1);"));
         assert!(out3.contains("drop(a);"));
+    }
+
+    #[test]
+    fn simplifies_cpp2rust_runtime_entrypoint_and_stdout() {
+        let faithful = r#"extern crate libcc2rs;
+use libcc2rs::*;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::io::prelude::*;
+use std::io::{Read, Seek, Write};
+use std::os::fd::AsFd;
+use std::rc::{Rc, Weak};
+pub fn main() {
+    __cpp2rust_init_globals();
+    std::process::exit(main_0());
+}
+fn main_0() -> i32 {
+    let min: i32 = 100;
+    let max: i32 = 1048575;
+    if min > max {
+        println!("Error in Code Runtime");
+        return -1_i32;
+    }
+    {
+        let mut __bytes = Ptr::<i8>::from_string_literal(b"Workers going on holoo").to_c_u8_bytes();
+        __bytes.push(b'\n');
+        match libcc2rs::c_stdout().with_mut(|__f| __f.write(&__bytes)) == __bytes.len() {
+            true => 0,
+            false => -1,
+        }
+    };
+    return 0;
+}
+pub fn __cpp2rust_init_globals() {}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(summary
+            .applied_passes
+            .iter()
+            .any(|pass| pass == "simplify_cpp2rust_runtime_scaffolding"));
+        assert!(!idiomatic.contains("libcc2rs"), "{idiomatic}");
+        assert!(!idiomatic.contains("Ptr::<i8>"));
+        assert!(!idiomatic.contains("main_0"));
+        assert!(idiomatic.contains("fn main()"));
+        assert!(idiomatic.contains("println!(\"Workers going on holoo\");"));
+        assert!(idiomatic.contains("std::process::exit(-1);"));
+    }
+
+    #[test]
+    fn rejects_raw_c2rust_ffi_scaffolding_as_idiomatic() {
+        let faithful = r#"extern "C" {
+    fn puts(_: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
+}
+unsafe fn main_0() -> ::core::ffi::c_int {
+    0
+}
+pub fn main() {
+    unsafe { ::std::process::exit(main_0() as i32) }
+}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert_eq!(idiomatic, faithful);
+        assert!(!summary.compiler_verified);
+        assert!(summary
+            .verification_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("runtime/FFI scaffolding"));
     }
 }
