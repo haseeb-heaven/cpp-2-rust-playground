@@ -5,7 +5,7 @@ import { rust } from "@codemirror/lang-rust";
 import { acceptCompletion, autocompletion, type CompletionContext } from "@codemirror/autocomplete";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { Decoration, EditorView, keymap } from "@codemirror/view";
-import { StateField } from "@codemirror/state";
+import { Prec, StateField } from "@codemirror/state";
 import type { EditorTheme } from "../types/studio";
 
 interface EditorPaneProps {
@@ -132,7 +132,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     const completionExtension = language === "cpp"
       ? [
           autocompletion({ override: [completeCpp] }),
-          keymap.of([{ key: "Tab", run: acceptCompletion }])
+          Prec.high(keymap.of([{ key: "Tab", run: acceptCompletion }]))
         ]
       : [];
     return [languageExtension, highlightExtension, cursorListener, ...completionExtension];

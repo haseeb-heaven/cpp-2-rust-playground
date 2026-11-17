@@ -1,6 +1,22 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("RustC-Playground End-to-End Suite", () => {
+  test("accepts C++ standard-library completion with Tab", async ({ page }) => {
+    await page.goto("/");
+
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill("std::vec");
+
+    await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(sourceEditorContent).toContainText("std::vector");
+  });
+
   test("loads split-screen editors, pre-made examples, and real-time conversion", async ({
     page
   }) => {
