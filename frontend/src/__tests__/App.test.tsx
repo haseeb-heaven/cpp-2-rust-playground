@@ -70,6 +70,17 @@ describe("App component", () => {
                   redundantMutRemoved: 0,
                   redundantCastsRemoved: 0
                 },
+                clippyLints: [
+                  {
+                    lineNumber: 3,
+                    column: 5,
+                    level: "warning",
+                    lint: "clippy::needless_return",
+                    message: "unneeded `return` statement"
+                  }
+                ],
+                clippyAvailable: true,
+                clippyError: null,
                 explanations: [
                   {
                     construct: "Dynamic Array (std::vector → Vec)",
@@ -155,6 +166,19 @@ describe("App component", () => {
     });
     expect(screen.queryByTestId("explanations-tab")).not.toBeInTheDocument();
     expect(screen.queryByTestId("output-explanation-summary")).not.toBeInTheDocument();
+  });
+
+  it("shows clippy lints for the generated Rust", async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId("clippy-tab")).toHaveTextContent("Clippy (1)");
+    });
+
+    fireEvent.click(screen.getByTestId("clippy-tab"));
+    expect(screen.getByTestId("clippy-summary")).toHaveTextContent("0 errors · 1 warning");
+    expect(screen.getByTestId("clippy-list")).toHaveTextContent("clippy::needless_return");
+    expect(screen.getByTestId("clippy-list")).toHaveTextContent("unneeded `return` statement");
+    expect(screen.getByTestId("clippy-list")).toHaveTextContent("Line 3:5");
   });
 
   it("switches cleanly between Readable Rust and Generated Rust modes", async () => {

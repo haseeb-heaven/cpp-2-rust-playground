@@ -20,6 +20,7 @@ import {
   saveWorkspaceToLocalStorage
 } from "./utils/storageUtility";
 import type {
+  ClippyLint,
   CodeExample,
   CompilerAvailability,
   CompilerStandard,
@@ -90,6 +91,8 @@ export const App: React.FC = () => {
 
   const [lineMappings, setLineMappings] = useState<LineMapping[]>([]);
   const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnostic[]>([]);
+  const [clippyLints, setClippyLints] = useState<ClippyLint[]>([]);
+  const [clippyError, setClippyError] = useState<string | null>(null);
   const [usedFallback, setUsedFallback] = useState<boolean>(true);
   const [compilerVerified, setCompilerVerified] = useState<boolean>(true);
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
@@ -172,6 +175,8 @@ export const App: React.FC = () => {
         .then((conversionResult) => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
+          setClippyLints(conversionResult.clippyLints ?? []);
+          setClippyError(conversionResult.clippyError ?? null);
           setUsedFallback(conversionResult.usedFallback ?? true);
           setCompilerVerified(conversionResult.postProcessing?.compilerVerified ?? false);
           setFallbackReason(conversionResult.fallbackReason ?? null);
@@ -626,6 +631,8 @@ export const App: React.FC = () => {
           lastExecutedLabel={lastExecutedLabel}
           isExecuting={isExecuting}
           conversionDiagnostics={conversionDiagnostics}
+          clippyLints={clippyLints}
+          clippyError={clippyError}
           lineMappings={lineMappings}
           onSelectLineMapping={handleSelectLineMapping}
         />

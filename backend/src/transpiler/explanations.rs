@@ -369,17 +369,17 @@ fn push_loop_and_style_explanations(
                 post_processing.compiler_verified
             );
             (
-                "Idiomatic Rust (Optional Learning View)",
+                "Readable Rust",
                 format!(
-                    "{} Idiomatic mode is an optional learning view alongside Faithful Rust that removes boilerplate comments, redundant `mut`, unnecessary casts, and trivial `unsafe` blocks, then checks compilation with `rustc` ({}).",
+                    "{} Readable Rust is the idiomatic projection of the engine output: it removes boilerplate and C ABI plumbing, drops redundant `mut`/casts, lowers C idioms to safe Rust, formats with `rustfmt`, and verifies the result with `rustc` and `clippy` ({}).",
                     engine_note, summary_details
                 ),
             )
         }
         RustOutputStyle::Faithful => (
-            "Faithful Rust (Raw Output)",
+            "Generated Rust",
             format!(
-                "{} Faithful mode preserves the uncleaned translator output 1:1 before optional idiomatic learning passes are applied.",
+                "{} Generated Rust preserves the uncleaned translator output 1:1 before the optional Readable Rust passes are applied.",
                 engine_note
             ),
         ),

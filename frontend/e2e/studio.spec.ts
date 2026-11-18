@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("C/C++ to Rust Playground End-to-End Suite", () => {
-  test("accepts C++ standard-library completion with Tab", async ({ page }) => {
+  test("accepts a C++ standard-library completion from the popup", async ({ page }) => {
     await page.goto("/");
 
     const sourceEditorContent = page
@@ -10,10 +10,14 @@ test.describe("C/C++ to Rust Playground End-to-End Suite", () => {
     await sourceEditorContent.click();
     await page.keyboard.press("Meta+a");
     await page.keyboard.press("Control+a");
-    await sourceEditorContent.fill("std::vec");
+    await sourceEditorContent.fill("");
+    await sourceEditorContent.type("std::vec", { delay: 40 });
 
-    await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible();
-    await page.keyboard.press("Tab");
+    const completionList = page.locator(".cm-tooltip-autocomplete");
+    await expect(completionList).toBeVisible();
+    // Accept the `std::vector` entry explicitly: the popup keeps every C++
+    // keyword/method option, so a bare Tab press applies whichever is first.
+    await completionList.getByText("std::vector", { exact: true }).first().click();
     await expect(sourceEditorContent).toContainText("std::vector");
   });
 
@@ -82,6 +86,15 @@ int main(){
     return 0;
 }`);
 
+    // The source does not compile, so Readable Rust must say so instead of
+    // presenting unverified fallback code as a clean translation.
+    await expect(page.getByTestId("rust-editor-pane")).toContainText(
+      "Readable Rust is unavailable",
+      { timeout: 60000 }
+    );
+
+    // The fallback translation itself stays available in Generated Rust.
+    await page.getByTestId("output-style-select").selectOption("faithful");
     await expect(page.getByTestId("rust-editor-pane")).toContainText(
       "// [Preprocessor] #inlcude <iostream>"
     );
@@ -392,6 +405,57 @@ int main() {
     await page.getByTestId("run-rust-button").click();
     await expect(page.getByTestId("program-output")).toContainText("haseeb", {
       timeout: 30000
+    });
+  });
+
+  test("shows clippy lints for the generated Rust", async ({ page }) => {
+    await page.goto("/");
+
+    await page.getByTestId("conversion-mode-select").selectOption("manual");
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill(`#include <iostream>
+
+class Person {
+private:
+    int id;
+    float score;
+public:
+    Person(int person_id) : id(person_id), score(0.0f) {}
+    void set_score(float value) {
+        if (this->id > 0) {
+            this->score = value;
+        }
+    }
+    float get_score() const {
+        if (this->id > 0) {
+            return this->score;
+        }
+        return -1.0f;
+    }
+};
+
+int main() {
+    Person p(1);
+    p.set_score(42.0f);
+    std::cout << "score " << p.get_score() << std::endl;
+    return 0;
+}`);
+
+    await page.getByTestId("convert-now-button").click();
+    await expect(page.getByTestId("rust-editor-pane")).toContainText("impl Person", {
+      timeout: 120000
+    });
+
+    await page.getByTestId("clippy-tab").click();
+    const clippyList = page.getByTestId("clippy-list");
+    await expect(clippyList).toBeVisible();
+    await expect(clippyList).toContainText(/clippy::|unused_mut|no lints/, {
+      timeout: 60000
     });
   });
 

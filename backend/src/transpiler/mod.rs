@@ -1,3 +1,4 @@
+pub mod clippy;
 pub mod diagnostics;
 pub mod explanations;
 pub mod line_translator;
@@ -646,16 +647,16 @@ pub fn convert_source_to_rust_with_style(
                     post_processing = readable_fallback_post_processing;
                     diagnostics = analyze_base_source_diagnostics(&source_lines);
                     fallback_reason = Some(format!(
-                        "Raw {} CLI output is available in Faithful mode, but it still contains runtime/FFI scaffolding. Idiomatic mode uses a separately rustc-verified readable fallback projection.",
+                        "Raw {} CLI output is available in Generated Rust, but it still contains runtime/FFI scaffolding. Readable Rust uses a separately rustc-verified projection.",
                         cli_name
                     ));
                     (
-                        format!("{} + Built-in Readable Idiomatic Projection", engine_label),
+                        format!("{} + Built-in Readable Projection", engine_label),
                         true,
                     )
                 } else {
                     idiomatic_rust_code = format!(
-                        "// Idiomatic Rust is unavailable for this upstream translation.\n// Use Faithful mode to inspect the raw {} output.\n// Reason: {}",
+                        "// Readable Rust is unavailable for this upstream translation.\n// Generated Rust shows the raw {} output.\n// Reason: {}",
                         cli_name,
                         backbone_post
                             .verification_error
@@ -664,7 +665,7 @@ pub fn convert_source_to_rust_with_style(
                     );
                     post_processing = backbone_post;
                     fallback_reason = Some(format!(
-                        "External {} CLI produced Faithful Rust, but no compiler-verified human-readable Idiomatic projection is available.",
+                        "External {} CLI produced Generated Rust, but no compiler-verified Readable projection is available.",
                         cli_name
                     ));
                     (engine_label, false)
@@ -688,25 +689,27 @@ pub fn convert_source_to_rust_with_style(
         (fallback_label, true)
     };
 
-    if !post_processing.compiler_verified && !source_code.trim().is_empty() && !has_base_errors {
-        diagnostics.push(ConversionDiagnostic {
-            line_number: 1,
-            severity: DiagnosticSeverity::Error,
-            category: ErrorCategory::Conversion,
-            message: format!(
-                "Fallback translation did not pass rustc verification: {}. The regex-based fallback translator cannot verify this C/C++ construct.",
-                post_processing
-                    .verification_error
-                    .as_deref()
-                    .unwrap_or("rustc verification failed")
-            ),
-            suggested_fix: Some(
-                "Install c2rust/cpp2rust CLI or inspect diagnostics and edit the generated Rust manually."
-                    .to_string(),
-            ),
-        });
+    if !post_processing.compiler_verified && !source_code.trim().is_empty() {
+        if !has_base_errors {
+            diagnostics.push(ConversionDiagnostic {
+                line_number: 1,
+                severity: DiagnosticSeverity::Error,
+                category: ErrorCategory::Conversion,
+                message: format!(
+                    "Translation did not pass rustc verification: {}. The translator cannot verify this C/C++ construct.",
+                    post_processing
+                        .verification_error
+                        .as_deref()
+                        .unwrap_or("rustc verification failed")
+                ),
+                suggested_fix: Some(
+                    "Install c2rust/cpp2rust CLI or inspect diagnostics and edit the generated Rust manually."
+                        .to_string(),
+                ),
+            });
+        }
         idiomatic_rust_code = format!(
-            "// Idiomatic Rust is unavailable for this C/C++ input.\n// {}\n// Faithful mode shows the raw engine/fallback output; it must be reviewed manually before use.",
+            "// Readable Rust is unavailable for this C/C++ input.\n// {}\n// Generated Rust shows the raw engine/fallback output; it must be reviewed manually before use.",
             fallback_reason
                 .as_deref()
                 .unwrap_or("The translator could not produce compiler-verified Rust")
@@ -734,6 +737,17 @@ pub fn convert_source_to_rust_with_style(
             mapping.rust_end_line = mapping.rust_end_line.min(max_line);
         }
     }
+    // Lint the code the user actually reads: the verified Readable projection,
+    // otherwise the raw Generated output.
+    let lint_target = if post_processing.compiler_verified {
+        idiomatic_rust_code.clone()
+    } else {
+        faithful_rust_code.clone()
+    };
+    let (clippy_lints, clippy_error) = match clippy::run_clippy(&lint_target) {
+        Ok(lints) => (lints, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
     let conversion_time_milliseconds = start_instant.elapsed().as_millis();
 
     ConversionResponse {
@@ -751,6 +765,9 @@ pub fn convert_source_to_rust_with_style(
         unsupported_constructs,
         post_processing,
         explanations,
+        clippy_lints,
+        clippy_available: clippy::clippy_available(),
+        clippy_error,
     }
 }
 
@@ -766,7 +783,7 @@ mod tests {
                 result.transpiler_engine.contains("Built-in Regex")
                     || result
                         .transpiler_engine
-                        .contains("Built-in Readable Idiomatic Projection")
+                        .contains("Built-in Readable Projection")
             );
         } else {
             let expected_engine = match language {
@@ -1757,7 +1774,7 @@ int main(void) {
                 .contains("raw engine transcription"));
             assert!(res.faithful_rust_code.contains("dijkstra_shortest_path"));
             assert!(!res.generated_rust_code.contains("unsafe"));
-            assert!(res.generated_rust_code.contains("Idiomatic Rust is unavailable"));
+            assert!(res.generated_rust_code.contains("Readable Rust is unavailable"));
         }
     }
 
@@ -2011,7 +2028,7 @@ int main(void) {
         assert!(!res_cpp_faithful.generated_rust_code.trim().is_empty());
         if res_cpp
             .transpiler_engine
-            .contains("Built-in Readable Idiomatic Projection")
+            .contains("Built-in Readable Projection")
         {
             assert!(res_cpp_faithful.generated_rust_code.contains("libcc2rs"));
         }

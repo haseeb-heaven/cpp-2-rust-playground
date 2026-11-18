@@ -32,6 +32,14 @@ export interface ConversionDiagnostic {
   suggestedFix: string | null;
 }
 
+export interface ClippyLint {
+  lineNumber: number;
+  column: number;
+  level: "warning" | "error" | string;
+  lint: string;
+  message: string;
+}
+
 export interface LineMapping {
   sourceLine: number;
   rustStartLine: number;
@@ -74,6 +82,9 @@ export interface ConversionResponse {
   unsupportedConstructs?: string[];
   postProcessing?: PostProcessingSummary;
   explanations?: ConversionExplanation[];
+  clippyLints?: ClippyLint[];
+  clippyAvailable?: boolean;
+  clippyError?: string | null;
 }
 
 export interface ExecutionResponse {

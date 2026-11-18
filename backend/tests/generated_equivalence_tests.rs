@@ -328,8 +328,8 @@ async fn generated_c_programs_convert_via_backbone_and_match_source_output() {
             conversion.generated_rust_code
         );
         assert_eq!(
-            source_result.output.trim(),
-            rust_result.output.trim(),
+            source_result.output,
+            rust_result.output,
             "case {index}: output mismatch\nC output:\n{}\nRust output:\n{}\n--- source ---\n{}\n--- Rust ---\n{}",
             source_result.output,
             rust_result.output,
@@ -522,6 +522,28 @@ async fn generated_cpp_programs_convert_via_backbone_and_match_source_output() {
             &SourceLanguage::Cpp,
             RustOutputStyle::Idiomatic,
         );
+        let template = index % 5;
+        assert!(
+            conversion.transpiler_engine.contains("cpp2rust CLI"),
+            "cpp case {index}: the cpp2rust backbone must run, got {:?}",
+            conversion.transpiler_engine
+        );
+        if matches!(template, 0 | 3) {
+            // Classes and struct-by-value calls are handled end to end by the
+            // backbone plus Readable lowering, with no fallback at all.
+            assert!(
+                !conversion.used_fallback,
+                "cpp case {index}: template {template} must not fall back ({:?})",
+                conversion.fallback_reason
+            );
+        }
+        if conversion.used_fallback {
+            // Falling back is only honest when the reason is reported.
+            assert!(
+                conversion.fallback_reason.is_some(),
+                "cpp case {index}: fallback without a reason"
+            );
+        }
         assert!(
             !conversion.generated_rust_code.contains("unsafe")
                 && !conversion.generated_rust_code.contains("extern \"C\"")
@@ -529,13 +551,15 @@ async fn generated_cpp_programs_convert_via_backbone_and_match_source_output() {
             "cpp case {index}: Readable Rust must be plain safe Rust:\n{}",
             conversion.generated_rust_code
         );
+        let unsupported_construct = template == 2;
         if !conversion.post_processing.compiler_verified {
             // Constructs with no safe projection (for example std::string) must say so
             // instead of showing the raw engine output as readable Rust.
             assert!(
-                conversion
-                    .generated_rust_code
-                    .contains("Idiomatic Rust is unavailable"),
+                unsupported_construct
+                    && conversion
+                        .generated_rust_code
+                        .contains("Readable Rust is unavailable"),
                 "cpp case {index}: expected verified Rust or an explicit notice: {:?}\n--- C++ ---\n{}",
                 conversion.post_processing.verification_error,
                 source
@@ -562,8 +586,8 @@ async fn generated_cpp_programs_convert_via_backbone_and_match_source_output() {
             rust_result.error_output, conversion.generated_rust_code
         );
         assert_eq!(
-            source_result.output.trim(),
-            rust_result.output.trim(),
+            source_result.output,
+            rust_result.output,
             "cpp case {index}: output mismatch\nC++ output:\n{}\nRust output:\n{}\n--- Rust ---\n{}",
             source_result.output,
             rust_result.output,

@@ -477,6 +477,13 @@ background: var(--bg-tertiary);
   border-left: 3px solid #f59e0b;
 }
 
+.clippy-summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 2px 2px 6px;
+}
+
 .diagnostic-header {
   display: flex;
   justify-content: space-between;

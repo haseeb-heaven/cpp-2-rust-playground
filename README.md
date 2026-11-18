@@ -21,8 +21,9 @@ An interactive web IDE and compiler wrapper built with **Rust (Axum)** and **Rea
 
 ### Output Modes
 
-- **Generated Rust**: The translator's raw output, preserved 1:1 (may contain `unsafe`, `extern "C"`, C ABI types, and engine runtime plumbing).
-- **Readable Rust**: Cleaned, `rustfmt`-formatted, `rustc`-verified, and strictly plain safe Rust: no `unsafe`, no `extern "C"`, no C ABI types, no libc calls. C constructs with a safe Rust equivalent are lowered automatically (`printf`/`puts` → `print!`/`println!`, `char` buffers → `[u8; N]` + `stdin().read`, `malloc`/`free` → `Vec`, C++ classes → structs with inherent methods). When no safe projection exists, the app says so instead of showing raw machine-shaped code, and every transform failing `rustc` verification rolls back automatically.
+- **Generated Rust**: The raw output of the C/C++ → Rust backbone (`c2rust` for C, `cpp2rust` for C++), preserved 1:1. It may contain `unsafe`, `extern "C"`, C ABI types, and engine runtime plumbing.
+- **Readable Rust**: The idiomatic projection of that output. Cleaned, `rustfmt`-formatted, `rustc`-verified, and strictly plain safe Rust: no `unsafe`, no `extern "C"`, no C ABI types, no libc calls. C constructs with a safe Rust equivalent are lowered automatically (`printf`/`puts` → `print!`/`println!`, `char` buffers → `[u8; N]` + `stdin().read`, `malloc`/`free` → `Vec`, C++ classes → structs with inherent methods). When no safe projection exists, the app says so instead of showing raw machine-shaped code, and every transform failing `rustc` verification rolls back automatically.
+- **Clippy Lints**: The Readable Rust is also linted with [`clippy`](https://github.com/rust-lang/rust-clippy) (`clippy-driver -W clippy::all`). The **Clippy** console tab lists every lint with its level, lint name, line/column, and message; if `clippy` is missing the tab says so and how to install it (`rustup component add clippy`).
 
 ### Execution Isolation & Resource Limits
 
@@ -70,15 +71,21 @@ export CPP2RUST_BIN="/path/to/cpp2rust"
   ```bash
   cd backend && cargo test
   ```
-- **Generated equivalence suite** — builds C programs from composable templates
-  (loops, arrays, structs, malloc, `sizeof` idioms, `printf` formats, recursion,
-  switches, bitwise math, 2D arrays, ...) and checks for every case that the
-  c2rust backbone produced it, that the Idiomatic projection is rustc-verified,
-  and that C and Rust print identical output. Defaults to 40 cases; scale it up:
+- **Generated equivalence suite** — builds C and C++ programs from composable
+  templates (loops, arrays, structs, malloc, `sizeof` idioms, `printf` formats,
+  recursion, switches, bitwise math, 2D arrays, classes, `std::vector`, structs
+  by value, nested `iostream` loops, ...) and checks for every case that the
+  backbone produced it, that the Readable projection is `rustc`-verified, and
+  that the source and Rust programs print byte-identical output. Defaults to 40
+  C and 10 C++ cases; scale it up:
   ```bash
-  cd backend && PLAYGROUND_EQUIV_CASES=1000 cargo test --test generated_equivalence_tests -- --nocapture
+  cd backend && PLAYGROUND_EQUIV_CASES=1000 PLAYGROUND_EQUIV_CPP_CASES=200 \
+    cargo test --test generated_equivalence_tests -- --nocapture
   ```
-  Every case is a pure function of its index, so a failure names a reproducible case.
+  Every case is a pure function of its index, so a failure names a reproducible
+  case. Constructs with no safe projection (`std::string`) are asserted to report
+  the explicit "Readable Rust is unavailable" notice instead of leaking raw
+  engine output.
 - **Frontend unit/component tests & build**:
   ```bash
   cd frontend && npm test && npm run build

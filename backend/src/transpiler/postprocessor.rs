@@ -163,7 +163,7 @@ fn contains_engine_runtime_scaffolding(code: &str) -> bool {
 
 /// Idiomatic output is plain safe Rust: no `unsafe`, no `extern "C"`, no C ABI
 /// types, no libc/engine calls. Anything that still needs them is a raw
-/// transcription and belongs in Faithful mode only.
+/// transcription and belongs in Generated Rust only.
 fn contains_unsafe_or_c_interop(code: &str) -> bool {
     static C_INTEROP_REGEX: Lazy<Regex> = Lazy::new(|| {
         Regex::new(
@@ -957,16 +957,20 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
     }
 
     // Trait dispatch through `Ptr<T>` becomes inherent methods on the struct.
-    let trait_impl = TRAIT_IMPL_REGEX
-        .captures(&updated)
-        .and_then(|captures| {
-            let whole = captures.get(0)?;
-            let type_name = captures.get(2)?.as_str().to_string();
-            let brace = whole.end() - 1;
-            let close = find_matching_delimiter(&updated, brace, '{', '}')?;
-            Some((whole.start(), brace, close, type_name))
-        });
-    if let Some((start, brace, close, type_name)) = trait_impl {
+    // Every dispatch implementation is lowered, not just the first one.
+    loop {
+        let trait_impl = TRAIT_IMPL_REGEX
+            .captures(&updated)
+            .and_then(|captures| {
+                let whole = captures.get(0)?;
+                let type_name = captures.get(2)?.as_str().to_string();
+                let brace = whole.end() - 1;
+                let close = find_matching_delimiter(&updated, brace, '{', '}')?;
+                Some((whole.start(), brace, close, type_name))
+            });
+        let Some((start, brace, close, type_name)) = trait_impl else {
+            break;
+        };
         let body = updated[brace + 1..close].to_string();
         let rewritten = mark_mutating_methods(&rewrite_cpp2rust_method_body(&body));
         updated = format!(
@@ -979,36 +983,47 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
         changed = true;
     }
 
-    // The trait declaration only existed to carry that dispatch layer.
-    if let Some(found) = TRAIT_DECL_REGEX.find(&updated) {
+    // The dispatch traits only existed to carry that layer.
+    loop {
+        let Some(found) = TRAIT_DECL_REGEX.find(&updated) else {
+            break;
+        };
         let brace = found.end() - 1;
-        if let Some(close) = find_matching_delimiter(&updated, brace, '{', '}') {
-            let mut end = close + 1;
-            while updated[end..].starts_with('\n') {
-                end += 1;
-            }
-            updated = format!("{}{}", &updated[..found.start()], &updated[end..]);
-            changed = true;
+        let Some(close) = find_matching_delimiter(&updated, brace, '{', '}') else {
+            break;
+        };
+        let mut end = close + 1;
+        while updated[end..].starts_with('\n') {
+            end += 1;
         }
+        updated = format!("{}{}", &updated[..found.start()], &updated[end..]);
+        changed = true;
     }
 
     // `PersonImpl::method(&obj.as_pointer(), args)` is `obj.method(args)`.
+    // Nested dispatches are rewritten innermost-last, so repeat until stable,
+    // and never touch program text inside literals or comments.
     static IMPL_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\b\w+Impl::(\w+)\(\s*&\s*(\w+)\.as_pointer\(\)\s*,?\s*([^)]*?)\s*,?\s*\)").unwrap()
+        Regex::new(r"\b\w+Impl::(\w+)\(\s*&\s*([A-Za-z_]\w*)\.as_pointer\(\)\s*,?\s*([^()]*(?:\([^()]*\))?[^()]*?)\s*,?\s*\)").unwrap()
     });
-    let calls = IMPL_CALL_REGEX
-        .replace_all(&updated, |captures: &regex::Captures| {
-            let method = &captures[1];
-            let object = &captures[2];
-            let args = captures[3].trim();
-            if args.is_empty() {
-                format!("{object}.{method}()")
-            } else {
-                format!("{object}.{method}({args})")
-            }
-        })
-        .to_string();
-    if calls != updated {
+    for _ in 0..8 {
+        let calls = transform_outside_literals(&updated, |text| {
+            IMPL_CALL_REGEX
+                .replace_all(text, |captures: &regex::Captures| {
+                    let method = &captures[1];
+                    let object = &captures[2];
+                    let args = captures[3].trim().trim_end_matches(',').trim();
+                    if args.is_empty() {
+                        format!("{object}.{method}()")
+                    } else {
+                        format!("{object}.{method}({args})")
+                    }
+                })
+                .to_string()
+        });
+        if calls == updated {
+            break;
+        }
         updated = calls;
         changed = true;
     }
@@ -1028,7 +1043,9 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
     // Inline the remaining `({ expr })` wrappers in expression position.
     static INLINE_BLOCK_EXPR: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"\(\{\s*([^;{}]+?)\s*\}\)").unwrap());
-    let inlined = INLINE_BLOCK_EXPR.replace_all(&updated, "($1)").to_string();
+    let inlined = transform_outside_literals(&updated, |text| {
+        INLINE_BLOCK_EXPR.replace_all(text, "($1)").to_string()
+    });
     if inlined != updated {
         updated = inlined;
         changed = true;
@@ -1039,7 +1056,9 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
         Regex::new(r"(?m)^([ \t]*)\((?P<call>[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\([^;]*\))\);")
             .unwrap()
     });
-    let unparenthesised = PAREN_STMT_REGEX.replace_all(&updated, "$1${call};").to_string();
+    let unparenthesised = transform_outside_literals(&updated, |text| {
+        PAREN_STMT_REGEX.replace_all(text, "$1${call};").to_string()
+    });
     if unparenthesised != updated {
         updated = unparenthesised;
         changed = true;
@@ -1049,9 +1068,9 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
     static STATEMENT_EXPR_REGEX: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?m)^([ \t]*)\(\{\s*([^;{}]*?)\s*\}\);").unwrap()
     });
-    let flattened = STATEMENT_EXPR_REGEX
-        .replace_all(&updated, "$1$2;")
-        .to_string();
+    let flattened = transform_outside_literals(&updated, |text| {
+        STATEMENT_EXPR_REGEX.replace_all(text, "$1$2;").to_string()
+    });
     if flattened != updated {
         updated = flattened;
         changed = true;
@@ -1132,6 +1151,180 @@ fn mark_mutating_methods(body: &str) -> String {
     updated
 }
 
+/// Byte ranges of string literals, char literals and comments in `code`.
+fn literal_ranges(code: &str) -> Vec<(usize, usize)> {
+    let bytes = code.as_bytes();
+    let mut ranges = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let start = index;
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+                ranges.push((start, index));
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+                ranges.push((start, index));
+            }
+            b'r' | b'b' | b'c' => {
+                // Possibly a raw string such as `r#"..."#` / `br#"..."#`.
+                let mut cursor = index + 1;
+                if bytes[index] == b'b' && bytes.get(cursor) == Some(&b'r') {
+                    cursor += 1;
+                } else if bytes[index] == b'c' && bytes.get(cursor) == Some(&b'"') {
+                    index = scan_quoted(code, index + 1);
+                    ranges.push((start, index));
+                    continue;
+                } else if bytes[index] != b'r' {
+                    index += 1;
+                    continue;
+                }
+                let mut hashes = 0usize;
+                while bytes.get(cursor) == Some(&b'#') {
+                    hashes += 1;
+                    cursor += 1;
+                }
+                if bytes.get(cursor) != Some(&b'"') {
+                    index += 1;
+                    continue;
+                }
+                cursor += 1;
+                let closing: Vec<u8> = std::iter::once(b'"')
+                    .chain(std::iter::repeat(b'#').take(hashes))
+                    .collect();
+                while cursor < bytes.len() {
+                    if bytes[cursor..].starts_with(&closing) {
+                        cursor += closing.len();
+                        break;
+                    }
+                    cursor += 1;
+                }
+                index = cursor;
+                ranges.push((start, index));
+            }
+            b'"' => {
+                index = scan_quoted(code, index);
+                ranges.push((start, index));
+            }
+            b'\'' => {
+                // A char literal closes within a couple of characters; a
+                // lifetime such as `'a` does not.
+                let mut cursor = index + 1;
+                if bytes.get(cursor) == Some(&b'\\') {
+                    cursor += 2;
+                } else {
+                    cursor += 1;
+                }
+                if bytes.get(cursor) == Some(&b'\'') {
+                    index = cursor + 1;
+                    ranges.push((start, index));
+                } else {
+                    index += 1;
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    ranges
+}
+
+fn scan_quoted(code: &str, quote_start: usize) -> usize {
+    let bytes = code.as_bytes();
+    let mut index = quote_start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// Masks every literal/comment so regex passes cannot rewrite program text.
+const MASK_OPEN: char = '\u{E000}';
+const MASK_CLOSE: char = '\u{E001}';
+
+fn mask_literals(code: &str) -> (String, Vec<String>) {
+    let ranges = literal_ranges(code);
+    if ranges.is_empty() {
+        return (code.to_string(), Vec::new());
+    }
+    let mut masked = String::with_capacity(code.len());
+    let mut literals = Vec::with_capacity(ranges.len());
+    let mut cursor = 0usize;
+    for (start, end) in ranges {
+        masked.push_str(&code[cursor..start]);
+        masked.push(MASK_OPEN);
+        masked.push_str(&literals.len().to_string());
+        masked.push(MASK_CLOSE);
+        literals.push(code[start..end].to_string());
+        cursor = end;
+    }
+    masked.push_str(&code[cursor..]);
+    (masked, literals)
+}
+
+fn unmask_literals(code: &str, literals: &[String]) -> String {
+    if literals.is_empty() {
+        return code.to_string();
+    }
+    let mut restored = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(open) = rest.find(MASK_OPEN) {
+        restored.push_str(&rest[..open]);
+        let after_open = &rest[open + MASK_OPEN.len_utf8()..];
+        let Some(close) = after_open.find(MASK_CLOSE) else {
+            restored.push_str(&rest[open..]);
+            return restored;
+        };
+        let index: Option<usize> = after_open[..close].trim().parse().ok();
+        match index.and_then(|index| literals.get(index)) {
+            Some(literal) => restored.push_str(literal),
+            None => restored.push_str(&rest[open..open + MASK_OPEN.len_utf8() + close + MASK_CLOSE.len_utf8()]),
+        }
+        rest = &after_open[close + MASK_CLOSE.len_utf8()..];
+    }
+    restored.push_str(rest);
+    restored
+}
+
+/// Runs `transform` over the executable tokens only, leaving literals intact.
+fn transform_outside_literals(code: &str, transform: impl Fn(&str) -> String) -> String {
+    let (masked, literals) = mask_literals(code);
+    if literals.is_empty() {
+        return transform(code);
+    }
+    unmask_literals(&transform(&masked), &literals)
+}
+
+/// Detects a trailing `\n` escape and returns the literal without it.
+fn strip_trailing_newline_escape(literal: &str) -> Option<&str> {
+    let bytes = literal.as_bytes();
+    if bytes.last() != Some(&b'n') {
+        return None;
+    }
+    let mut backslashes = 0usize;
+    let mut index = bytes.len() - 1;
+    while index > 0 && bytes[index - 1] == b'\\' {
+        backslashes += 1;
+        index -= 1;
+    }
+    if backslashes % 2 == 1 {
+        Some(&literal[..literal.len() - 2])
+    } else {
+        None
+    }
+}
+
 /// Lowers `write!(libcc2rs::cout(), "fmt", args)` to `print!`/`println!`.
 fn lower_cpp2rust_cout_writes(code: &str) -> (String, bool) {
     static WRITE_CALL_REGEX: Lazy<Regex> =
@@ -1142,6 +1335,12 @@ fn lower_cpp2rust_cout_writes(code: &str) -> (String, bool) {
     let mut changed = false;
 
     while let Some(found) = WRITE_CALL_REGEX.find(rest) {
+        let preceding = &rest[..found.start()];
+        if literal_ranges(preceding).last().map(|(_, end)| *end) == Some(found.start()) {
+            result.push_str(&rest[..found.end()]);
+            rest = &rest[found.end()..];
+            continue;
+        }
         result.push_str(&rest[..found.start()]);
         let open_relative = found.end() - 1;
         let Some(close) = find_matching_delimiter(rest, open_relative, '(', ')') else {
@@ -1165,7 +1364,7 @@ fn lower_cpp2rust_cout_writes(code: &str) -> (String, bool) {
             continue;
         };
 
-        let (format, line_break) = match format_literal.strip_suffix("\\n") {
+        let (format, line_break) = match strip_trailing_newline_escape(format_literal) {
             Some(rest) => (rest.to_string(), true),
             None => (format_literal.to_string(), false),
         };
@@ -1212,7 +1411,10 @@ fn merge_duplicate_impl_blocks(code: &str) -> (String, bool) {
         for pair in blocks.windows(2) {
             let (start_a, brace_a, close_a, end_a, ref name_a) = pair[0];
             let (start_b, brace_b, close_b, end_b, ref name_b) = pair[1];
-            if name_a != name_b || !updated[end_a..start_b].trim().is_empty() {
+            if name_a != name_b || start_b < end_a {
+                continue;
+            }
+            if !updated[end_a..start_b].trim().is_empty() {
                 continue;
             }
             let inner_a = &updated[brace_a + 1..close_a];
@@ -2882,11 +3084,10 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 }
             }
 
-            if std::env::var("DEBUG_CAND").is_ok() { let _ = fs::write("/tmp/candidate.rs", &candidate); }
             if still_raw_engine_transcription(faithful_rust, &candidate) {
                 summary.compiler_verified = false;
                 summary.verification_error = Some(
-                    "Upstream output is still a raw engine transcription (C ABI/runtime scaffolding); it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
+                    "Upstream output is still a raw engine transcription (C ABI/runtime scaffolding); it is available in Generated Rust but was not accepted as Readable Rust."
                         .to_string(),
                 );
                 summary.rejected_passes.push(
@@ -2904,11 +3105,10 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 candidate_err
             ));
             summary.formatted_with_rustfmt = false;
-            if std::env::var("DEBUG_CAND").is_ok() { let _ = fs::write("/tmp/candidate_err.rs", &candidate); }
             if still_raw_engine_transcription(faithful_rust, faithful_rust) {
                 summary.compiler_verified = false;
                 summary.verification_error = Some(
-                    "Upstream output is still a raw engine transcription (C ABI/runtime scaffolding); it is available in Faithful mode but was not accepted as human-readable Idiomatic Rust."
+                    "Upstream output is still a raw engine transcription (C ABI/runtime scaffolding); it is available in Generated Rust but was not accepted as Readable Rust."
                         .to_string(),
                 );
                 summary.rejected_passes.push(

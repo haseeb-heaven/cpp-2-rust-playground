@@ -96,6 +96,16 @@ pub struct ConversionDiagnostic {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClippyLint {
+    pub line_number: usize,
+    pub column: usize,
+    pub level: String,
+    pub lint: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LineMapping {
     pub source_line: usize,
     pub rust_start_line: usize,
@@ -161,6 +171,9 @@ pub struct ConversionResponse {
     pub unsupported_constructs: Vec<String>,
     pub post_processing: PostProcessingSummary,
     pub explanations: Vec<ConversionExplanation>,
+    pub clippy_lints: Vec<ClippyLint>,
+    pub clippy_available: bool,
+    pub clippy_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

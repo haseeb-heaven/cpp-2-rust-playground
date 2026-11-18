@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Cpu, Terminal, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Cpu, ShieldCheck, Terminal, XCircle } from "lucide-react";
 import type {
+  ClippyLint,
   ConversionDiagnostic,
   ExecutionProvider,
   ExecutionResponse,
@@ -15,11 +16,13 @@ interface OutputConsoleProps {
   lastExecutedLabel: string | null;
   isExecuting: boolean;
   conversionDiagnostics: ConversionDiagnostic[];
+  clippyLints?: ClippyLint[];
+  clippyError?: string | null;
   lineMappings: LineMapping[];
   onSelectLineMapping: (sourceLine: number, rustStartLine: number, rustEndLine: number) => void;
 }
 
-type ConsoleTab = "output" | "diagnostics" | "mappings";
+type ConsoleTab = "output" | "diagnostics" | "clippy" | "mappings";
 
 export const OutputConsole: React.FC<OutputConsoleProps> = ({
   stdinInput,
@@ -29,6 +32,8 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
   lastExecutedLabel,
   isExecuting,
   conversionDiagnostics,
+  clippyLints = [],
+  clippyError = null,
   lineMappings,
   onSelectLineMapping
 }) => {
@@ -38,6 +43,8 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
     ...conversionDiagnostics,
     ...(executionResult?.diagnostics ?? [])
   ];
+  const clippyErrors = clippyLints.filter((lint) => lint.level === "error").length;
+  const clippyWarnings = clippyLints.length - clippyErrors;
 
   return (
     <section className="output-console" data-testid="output-console">
@@ -59,6 +66,17 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
         >
           <AlertTriangle size={14} />
           <span>Diagnostics ({combinedDiagnostics.length})</span>
+        </button>
+
+        <button
+          type="button"
+          className={`console-tab ${activeTab === "clippy" ? "active" : ""}`}
+          onClick={() => setActiveTab("clippy")}
+          title="Rust clippy lints for the generated code"
+          data-testid="clippy-tab"
+        >
+          <ShieldCheck size={14} />
+          <span>Clippy ({clippyLints.length})</span>
         </button>
 
         <button
@@ -173,6 +191,49 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
                   )}
                 </div>
               ))
+            )}
+          </div>
+        )}
+
+        {activeTab === "clippy" && (
+          <div className="diagnostics-list" data-testid="clippy-list">
+            {clippyError ? (
+              <div className="empty-state">
+                Clippy is unavailable: {clippyError}
+                {" "}Install it with `rustup component add clippy`.
+              </div>
+            ) : clippyLints.length === 0 ? (
+              <div className="empty-state" data-testid="clippy-clean">
+                Clippy reports no lints for the generated Rust.
+              </div>
+            ) : (
+              <>
+                <div className="clippy-summary" data-testid="clippy-summary">
+                  {clippyErrors} error{clippyErrors === 1 ? "" : "s"} · {clippyWarnings} warning
+                  {clippyWarnings === 1 ? "" : "s"}
+                </div>
+                {clippyLints.map((lint, index) => (
+                  <div
+                    key={index}
+                    className={`diagnostic-item severity-${
+                      lint.level === "error" ? "error" : "warning"
+                    }`}
+                    onClick={() =>
+                      onSelectLineMapping(lint.lineNumber, lint.lineNumber, lint.lineNumber)
+                    }
+                  >
+                    <div className="diagnostic-header">
+                      <span className="diagnostic-badge">
+                        {lint.level.toUpperCase()} · {lint.lint}
+                      </span>
+                      <span className="diagnostic-line">
+                        Line {lint.lineNumber}:{lint.column}
+                      </span>
+                    </div>
+                    <div className="diagnostic-message">{lint.message}</div>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         )}
