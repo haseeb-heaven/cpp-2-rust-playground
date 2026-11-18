@@ -2226,4 +2226,26 @@ int main() {
         assert!(result.generated_rust_code.contains("arr.len()"));
         assert!(!result.generated_rust_code.contains("size_of::<arr[0]>"));
     }
+
+#[test]
+fn converts_c_string_pointer_alias_and_substring_check_to_readable_rust() {
+let source = r#"#include <stdio.h>
+#include <string.h>
+int main() {
+    const char *str1 = "I am Heaven";
+    const char *str2 = "Heaven";
+    const char *ptr = str2;
+    if (strstr(str1, str2) != 0) {
+        str2 = "Denver";
+        printf("Found %s\n", ptr);
+    }
+    return 0;
+}"#;
+let result = convert_source_to_rust_with_style(source, &SourceLanguage::C, RustOutputStyle::Idiomatic);
+assert!(result.post_processing.compiler_verified, "{:?}\n{}", result.post_processing.verification_error, result.generated_rust_code);
+assert!(result.generated_rust_code.contains("str1.contains(str2)"));
+assert!(result.generated_rust_code.contains("let ptr: &str = str2;"));
+assert!(!result.generated_rust_code.contains("&&str"));
+assert!(result.generated_rust_code.contains("println!(\"Found {}\", ptr);"));
+}
 }

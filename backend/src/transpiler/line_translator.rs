@@ -4009,7 +4009,10 @@ fn translate_statement_line(trimmed: &str, state: &mut TranslatorState) -> Strin
                     .to_string();
             }
 
-            let mutability = if is_const { "" } else { "mut " };
+            // In `const char *name`, `const` qualifies the bytes, not the
+            // pointer variable. Keep the Rust binding mutable so a later C
+            // pointer reassignment remains valid; cleanup removes unused mut.
+            let mutability = if is_const && !is_char_ptr { "" } else { "mut " };
             if rust_type == "_" {
                 return format!("let {}{} = {};", mutability, variable_name, translated_value);
             }
