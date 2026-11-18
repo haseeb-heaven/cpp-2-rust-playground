@@ -21,8 +21,8 @@ An interactive web IDE and compiler wrapper built with **Rust (Axum)** and **Rea
 
 ### Output Modes
 
-- **Faithful Rust (Raw Output)**: Preserves the uncleaned translator output 1:1.
-- **Idiomatic Rust (Learning Mode)**: Optional educational view that strips boilerplate, removes redundant `mut` / casts / trivial `unsafe` blocks, formats with `rustfmt`, checks compilation via `rustc --emit=metadata`, and explains construct ownership & iteration differences (`std::vector<int>` → `Vec<i32>`, `&T` / `&mut T`, etc.). Any transform failing `rustc` verification rolls back automatically.
+- **Generated Rust**: The translator's raw output, preserved 1:1 (may contain `unsafe`, `extern "C"`, C ABI types, and engine runtime plumbing).
+- **Readable Rust**: Cleaned, `rustfmt`-formatted, `rustc`-verified, and strictly plain safe Rust: no `unsafe`, no `extern "C"`, no C ABI types, no libc calls. C constructs with a safe Rust equivalent are lowered automatically (`printf`/`puts` → `print!`/`println!`, `char` buffers → `[u8; N]` + `stdin().read`, `malloc`/`free` → `Vec`, C++ classes → structs with inherent methods). When no safe projection exists, the app says so instead of showing raw machine-shaped code, and every transform failing `rustc` verification rolls back automatically.
 
 ### Execution Isolation & Resource Limits
 

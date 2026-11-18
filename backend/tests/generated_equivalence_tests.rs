@@ -343,3 +343,232 @@ async fn generated_c_programs_convert_via_backbone_and_match_source_output() {
     assert!(converted >= 1);
 }
 
+
+fn generate_cpp_case(index: u64) -> String {
+    let mut rng = Rng::new(0xC0FFEEu64.wrapping_mul(index + 7));
+    let pick = |rng: &mut Rng, bound: u64| rng.below(bound);
+    match index % 5 {
+        0 => {
+            // Class with constructor, setter/getter and iostream output.
+            let id = 1 + pick(&mut rng, 5);
+            let score = 10 + pick(&mut rng, 90);
+            format!(
+                r#"#include <iostream>
+class Person {{
+private:
+    int id;
+    float score;
+public:
+    Person(int person_id) : id(person_id), score(0.0f) {{}}
+    void set_score(float value) {{
+        if (this->id > 0) {{
+            this->score = value;
+        }}
+    }}
+    float get_score() const {{
+        if (this->id > 0) {{
+            return this->score;
+        }}
+        return -1.0f;
+    }}
+}};
+int main() {{
+    Person p({id});
+    p.set_score({score}.0f);
+    std::cout << "score " << p.get_score() << std::endl;
+    return 0;
+}}"#,
+                id = id,
+                score = score
+            )
+        }
+        1 => {
+            // std::vector accumulation loop.
+            let n = 3 + pick(&mut rng, 5);
+            format!(
+                r#"#include <iostream>
+#include <vector>
+int main() {{
+    std::vector<int> values;
+    for (int i = 0; i < {n}; i++) {{
+        values.push_back(i * 3 + 1);
+    }}
+    int total = 0;
+    for (int v : values) {{
+        total += v;
+    }}
+    std::cout << "total " << total << std::endl;
+    return 0;
+}}"#,
+                n = n
+            )
+        }
+        2 => {
+            // std::string concatenation and printing.
+            let repeat = 1 + pick(&mut rng, 4);
+            format!(
+                r#"#include <iostream>
+#include <string>
+int main() {{
+    std::string word = "rust";
+    std::string line;
+    for (int i = 0; i < {repeat}; i++) {{
+        line += word;
+    }}
+    std::cout << line << std::endl;
+    return 0;
+}}"#,
+                repeat = repeat
+            )
+        }
+        3 => {
+            // Struct with a free function.
+            let a = pick(&mut rng, 40);
+            let b = pick(&mut rng, 40);
+            format!(
+                r#"#include <iostream>
+struct Point {{
+    int x;
+    int y;
+}};
+int manhattan(Point p) {{
+    return (p.x < 0 ? -p.x : p.x) + (p.y < 0 ? -p.y : p.y);
+}}
+int main() {{
+    Point p = {{ {a}, {b} }};
+    std::cout << "manhattan " << manhattan(p) << std::endl;
+    return 0;
+}}"#,
+                a = a,
+                b = b
+            )
+        }
+        _ => {
+            // Nested loop with iostream formatting.
+            let rows = 2 + pick(&mut rng, 3);
+            let cols = 2 + pick(&mut rng, 3);
+            format!(
+                r#"#include <iostream>
+int main() {{
+    for (int i = 1; i <= {rows}; i++) {{
+        for (int j = 1; j <= {cols}; j++) {{
+            std::cout << i * j << " ";
+        }}
+        std::cout << std::endl;
+    }}
+    return 0;
+}}"#,
+                rows = rows,
+                cols = cols
+            )
+        }
+    }
+}
+
+fn cpp_case_count() -> u64 {
+    std::env::var("PLAYGROUND_EQUIV_CPP_CASES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(10)
+}
+
+#[tokio::test]
+async fn generated_cpp_programs_convert_via_backbone_and_match_source_output() {
+    if find_local_compiler(&ExecutionLanguage::Cpp).is_none()
+        || find_local_compiler(&ExecutionLanguage::Rust).is_none()
+    {
+        return;
+    }
+    if rustc_playground_backend::transpiler::detect_external_transpiler_binary(&SourceLanguage::Cpp)
+        .is_none()
+    {
+        return;
+    }
+
+    let configuration = ApplicationConfiguration {
+        jdooodle_client_id: String::new(),
+        jdooodle_client_secret: String::new(),
+        jdooodle_api_url: "https://api.jdoodle.com/v1/execute".to_string(),
+        backend_port: 8080,
+        request_timeout_seconds: 120,
+    };
+
+    let count = cpp_case_count();
+    for index in 0..count {
+        let source = generate_cpp_case(index);
+
+        let source_result = execute_program(
+            &configuration,
+            &ExecutionRequest {
+                code: source.clone(),
+                language: ExecutionLanguage::Cpp,
+                mode: ExecutionMode::Run,
+                stdin_input: String::new(),
+                provider: Some(ExecutionProvider::Local),
+                compiler_standard: None,
+            },
+        )
+        .await;
+        assert!(
+            source_result.success,
+            "cpp case {index}: generated C++ failed to compile/run:\n{}\n{}",
+            source,
+            source_result.error_output
+        );
+
+        let conversion = convert_source_to_rust_with_style(
+            &source,
+            &SourceLanguage::Cpp,
+            RustOutputStyle::Idiomatic,
+        );
+        assert!(
+            !conversion.generated_rust_code.contains("unsafe")
+                && !conversion.generated_rust_code.contains("extern \"C\"")
+                && !conversion.generated_rust_code.contains("libcc2rs"),
+            "cpp case {index}: Readable Rust must be plain safe Rust:\n{}",
+            conversion.generated_rust_code
+        );
+        if !conversion.post_processing.compiler_verified {
+            // Constructs with no safe projection (for example std::string) must say so
+            // instead of showing the raw engine output as readable Rust.
+            assert!(
+                conversion
+                    .generated_rust_code
+                    .contains("Idiomatic Rust is unavailable"),
+                "cpp case {index}: expected verified Rust or an explicit notice: {:?}\n--- C++ ---\n{}",
+                conversion.post_processing.verification_error,
+                source
+            );
+            println!("cpp case {index}: no safe projection (documented limitation)");
+            continue;
+        }
+
+        let rust_result = execute_program(
+            &configuration,
+            &ExecutionRequest {
+                code: conversion.generated_rust_code.clone(),
+                language: ExecutionLanguage::Rust,
+                mode: ExecutionMode::Run,
+                stdin_input: String::new(),
+                provider: Some(ExecutionProvider::Local),
+                compiler_standard: None,
+            },
+        )
+        .await;
+        assert!(
+            rust_result.success,
+            "cpp case {index}: readable Rust failed to compile/run:\n{}\n--- Rust ---\n{}",
+            rust_result.error_output, conversion.generated_rust_code
+        );
+        assert_eq!(
+            source_result.output.trim(),
+            rust_result.output.trim(),
+            "cpp case {index}: output mismatch\nC++ output:\n{}\nRust output:\n{}\n--- Rust ---\n{}",
+            source_result.output,
+            rust_result.output,
+            conversion.generated_rust_code
+        );
+    }
+}
+

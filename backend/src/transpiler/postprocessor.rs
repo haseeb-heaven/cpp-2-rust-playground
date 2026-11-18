@@ -866,6 +866,370 @@ fn lower_malloc_arrays_to_vec(code: &str) -> (String, bool) {
     (updated, changed)
 }
 
+/// Lowers the cpp2rust class translation shape to plain Rust.
+///
+/// cpp2rust models C++ objects with its `libcc2rs` runtime: layout derives,
+/// `Value<T>` handles (`Rc<RefCell<T>>`), a `Trait for Ptr<T>` dispatch layer,
+/// `field!(..)` accessors and `write!(libcc2rs::cout(), ..)`. For a standalone
+/// program none of that is observable, so it can be replaced by an owned struct
+/// with inherent methods, `self.field` access and `print!`/`println!`. Every
+/// rewrite is language-wide; the caller verifies the result with rustc.
+fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
+    if !code.contains("libcc2rs") {
+        return (code.to_string(), false);
+    }
+
+    static RUNTIME_IMPORT_LINES: &[&str] = &[
+        "extern crate libcc2rs;",
+        "use libcc2rs::*;",
+        "use std::cell::RefCell;",
+        "use std::collections::BTreeMap;",
+        "use std::io::prelude::*;",
+        "use std::io::{Read, Seek, Write};",
+        "use std::os::fd::AsFd;",
+        "use std::rc::{Rc, Weak};",
+    ];
+    static LAYOUT_DERIVE_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^[ \t]*#\[derive\(([^\)]*\b(?:Record|ByteRepr|VaArg|FnPtrArg|CppFrom)\b[^\)]*)\)\][ \t]*\n?")
+            .unwrap()
+    });
+    static CPP2RUST_DERIVE_NAMES: &[&str] = &["Record", "ByteRepr", "VaArg", "FnPtrArg", "CppFrom"];
+    static LAYOUT_ATTR_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^[ \t]*#\[(?:cpp_from|byte_size|offset)\([^\)]*\)\][ \t]*\n?").unwrap()
+    });
+    static VALUE_LET_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^([ \t]*)let\s+(\w+)\s*:\s*Value<(\w+)>\s*=\s*Rc::new\(RefCell::new\((.*)\)\);\s*$")
+            .unwrap()
+    });
+    static TRAIT_DECL_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"pub\s+trait\s+(\w+)Impl\s*\{").unwrap());
+    static TRAIT_IMPL_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"impl\s+(\w+)Impl\s+for\s+Ptr<(\w+)>\s*\{").unwrap());
+
+    let mut updated = code.to_string();
+    let mut changed = false;
+
+    // Runtime plumbing that a standalone program never observes.
+    let without_imports: Vec<&str> = updated
+        .lines()
+        .filter(|line| !RUNTIME_IMPORT_LINES.contains(&line.trim()))
+        .collect();
+    let joined = without_imports.join("\n");
+    if joined != updated {
+        updated = joined;
+        changed = true;
+    }
+    // Keep the standard derives (Clone/Copy/Default/...) that the generated code
+    // relies on and drop only the cpp2rust layout derives.
+    let stripped = LAYOUT_DERIVE_REGEX
+        .replace_all(&updated, |captures: &regex::Captures| {
+            let kept: Vec<&str> = captures[1]
+                .split(',')
+                .map(|entry| entry.trim())
+                .filter(|entry| !entry.is_empty() && !CPP2RUST_DERIVE_NAMES.contains(entry))
+                .collect();
+            if kept.is_empty() {
+                String::new()
+            } else {
+                format!("#[derive({})]\n", kept.join(", "))
+            }
+        })
+        .to_string();
+    if stripped != updated {
+        updated = stripped;
+        changed = true;
+    }
+    let stripped = LAYOUT_ATTR_REGEX.replace_all(&updated, "").to_string();
+    if stripped != updated {
+        updated = stripped;
+        changed = true;
+    }
+
+    // `Value<T> = Rc::new(RefCell::new(x))` is just an owned value here.
+    let owned = VALUE_LET_REGEX
+        .replace_all(&updated, |captures: &regex::Captures| {
+            format!("{}let mut {} = {};", &captures[1], &captures[2], &captures[4])
+        })
+        .to_string();
+    if owned != updated {
+        updated = owned;
+        changed = true;
+    }
+
+    // Trait dispatch through `Ptr<T>` becomes inherent methods on the struct.
+    let trait_impl = TRAIT_IMPL_REGEX
+        .captures(&updated)
+        .and_then(|captures| {
+            let whole = captures.get(0)?;
+            let type_name = captures.get(2)?.as_str().to_string();
+            let brace = whole.end() - 1;
+            let close = find_matching_delimiter(&updated, brace, '{', '}')?;
+            Some((whole.start(), brace, close, type_name))
+        });
+    if let Some((start, brace, close, type_name)) = trait_impl {
+        let body = updated[brace + 1..close].to_string();
+        let rewritten = mark_mutating_methods(&rewrite_cpp2rust_method_body(&body));
+        updated = format!(
+            "{}impl {} {{{}{}",
+            &updated[..start],
+            type_name,
+            rewritten,
+            &updated[close..]
+        );
+        changed = true;
+    }
+
+    // The trait declaration only existed to carry that dispatch layer.
+    if let Some(found) = TRAIT_DECL_REGEX.find(&updated) {
+        let brace = found.end() - 1;
+        if let Some(close) = find_matching_delimiter(&updated, brace, '{', '}') {
+            let mut end = close + 1;
+            while updated[end..].starts_with('\n') {
+                end += 1;
+            }
+            updated = format!("{}{}", &updated[..found.start()], &updated[end..]);
+            changed = true;
+        }
+    }
+
+    // `PersonImpl::method(&obj.as_pointer(), args)` is `obj.method(args)`.
+    static IMPL_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\b\w+Impl::(\w+)\(\s*&\s*(\w+)\.as_pointer\(\)\s*,?\s*([^)]*?)\s*,?\s*\)").unwrap()
+    });
+    let calls = IMPL_CALL_REGEX
+        .replace_all(&updated, |captures: &regex::Captures| {
+            let method = &captures[1];
+            let object = &captures[2];
+            let args = captures[3].trim();
+            if args.is_empty() {
+                format!("{object}.{method}()")
+            } else {
+                format!("{object}.{method}({args})")
+            }
+        })
+        .to_string();
+    if calls != updated {
+        updated = calls;
+        changed = true;
+    }
+
+    let (without_writes, wrote) = lower_cpp2rust_cout_writes(&updated);
+    if wrote {
+        updated = without_writes;
+        changed = true;
+    }
+
+    let (merged_impls, merged_changed) = merge_duplicate_impl_blocks(&updated);
+    if merged_changed {
+        updated = merged_impls;
+        changed = true;
+    }
+
+    // Inline the remaining `({ expr })` wrappers in expression position.
+    static INLINE_BLOCK_EXPR: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\(\{\s*([^;{}]+?)\s*\}\)").unwrap());
+    let inlined = INLINE_BLOCK_EXPR.replace_all(&updated, "($1)").to_string();
+    if inlined != updated {
+        updated = inlined;
+        changed = true;
+    }
+
+    // A parenthesised method-call statement needs no parentheses.
+    static PAREN_STMT_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^([ \t]*)\((?P<call>[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\([^;]*\))\);")
+            .unwrap()
+    });
+    let unparenthesised = PAREN_STMT_REGEX.replace_all(&updated, "$1${call};").to_string();
+    if unparenthesised != updated {
+        updated = unparenthesised;
+        changed = true;
+    }
+
+    // cpp2rust wraps statement expressions in `({ .. });` on their own line.
+    static STATEMENT_EXPR_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^([ \t]*)\(\{\s*([^;{}]*?)\s*\}\);").unwrap()
+    });
+    let flattened = STATEMENT_EXPR_REGEX
+        .replace_all(&updated, "$1$2;")
+        .to_string();
+    if flattened != updated {
+        updated = flattened;
+        changed = true;
+    }
+
+    // Global-init hook is runtime-only.
+    let without_init_call: Vec<&str> = updated
+        .lines()
+        .filter(|line| line.trim() != "__cpp2rust_init_globals();")
+        .collect();
+    let joined = without_init_call.join("\n");
+    if joined != updated {
+        updated = joined;
+        changed = true;
+    }
+    static INIT_FN_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?m)^[ \t]*pub\s+fn\s+__cpp2rust_init_globals\s*\(\s*\)\s*\{\s*\}[ \t]*\n?").unwrap()
+    });
+    let without_init_fn = INIT_FN_REGEX.replace_all(&updated, "").to_string();
+    if without_init_fn != updated {
+        updated = without_init_fn;
+        changed = true;
+    }
+
+    (updated, changed)
+}
+
+/// Rewrites cpp2rust field access inside a method body.
+fn rewrite_cpp2rust_method_body(body: &str) -> String {
+    static FIELD_WRITE_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"field!\(\(\*self\),\s*(\w+)\)\.write\(([^;]*)\);").unwrap());
+    static FIELD_READ_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"field!\(\(\*self\),\s*(\w+)\)\.read\(\)").unwrap());
+    static WITH_ACCESS_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\(\*self\)\.with\(\|__s\|\s*__s\.([A-Za-z_][A-Za-z0-9_]*)\)").unwrap());
+
+    let written = FIELD_WRITE_REGEX
+        .replace_all(body, "self.$1 = $2;")
+        .to_string();
+    let read = FIELD_READ_REGEX
+        .replace_all(&written, "self.$1")
+        .to_string();
+    WITH_ACCESS_REGEX
+        .replace_all(&read, "self.$1")
+        .to_string()
+}
+
+/// Takes `&mut self` for methods that assign a field, `&self` otherwise.
+fn mark_mutating_methods(body: &str) -> String {
+    static FN_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap());
+    let mut updated = body.to_string();
+    let mut edits: Vec<(usize, usize)> = Vec::new();
+    for found in FN_REGEX.find_iter(body) {
+        let Some(brace) = body[found.end()..].find('{').map(|o| found.end() + o) else {
+            continue;
+        };
+        let Some(close) = find_matching_delimiter(body, brace, '{', '}') else {
+            continue;
+        };
+        let signature = &body[found.start()..brace];
+        if signature.contains("&mut self") || !signature.contains("&self") {
+            continue;
+        }
+        let method_body = &body[brace..=close];
+        let mutates = method_body.contains("self.")
+            && Regex::new(r"\bself\.[A-Za-z_][A-Za-z0-9_]*\s*(?:[-+*/]?=)")
+                .map(|pattern| pattern.is_match(method_body))
+                .unwrap_or(false);
+        if mutates {
+            if let Some(receiver) = signature.find("&self") {
+                edits.push((found.start() + receiver, found.start() + receiver + "&self".len()));
+            }
+        }
+    }
+    for (start, end) in edits.into_iter().rev() {
+        updated.replace_range(start..end, "&mut self");
+    }
+    updated
+}
+
+/// Lowers `write!(libcc2rs::cout(), "fmt", args)` to `print!`/`println!`.
+fn lower_cpp2rust_cout_writes(code: &str) -> (String, bool) {
+    static WRITE_CALL_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?s)\bwrite!\s*\(").unwrap());
+
+    let mut result = String::with_capacity(code.len());
+    let mut rest = code;
+    let mut changed = false;
+
+    while let Some(found) = WRITE_CALL_REGEX.find(rest) {
+        result.push_str(&rest[..found.start()]);
+        let open_relative = found.end() - 1;
+        let Some(close) = find_matching_delimiter(rest, open_relative, '(', ')') else {
+            result.push_str(&rest[found.start()..]);
+            return (result, changed);
+        };
+        let inner = &rest[open_relative + 1..close];
+        let arguments = split_top_level_arguments(inner);
+        let is_cout = arguments
+            .first()
+            .map(|argument| argument.starts_with("libcc2rs::cout()"))
+            .unwrap_or(false);
+        let format_literal = arguments
+            .get(1)
+            .and_then(|argument| argument.strip_prefix('"'))
+            .and_then(|argument| argument.strip_suffix('"'));
+
+        let (Some(_), Some(format_literal)) = (is_cout.then_some(()), format_literal) else {
+            result.push_str(&rest[found.start()..=close]);
+            rest = &rest[close + 1..];
+            continue;
+        };
+
+        let (format, line_break) = match format_literal.strip_suffix("\\n") {
+            Some(rest) => (rest.to_string(), true),
+            None => (format_literal.to_string(), false),
+        };
+        let macro_name = if line_break { "println!" } else { "print!" };
+        let rest_args: Vec<&str> = arguments[2..]
+            .iter()
+            .copied()
+            .filter(|argument| !argument.is_empty())
+            .collect();
+        if rest_args.is_empty() {
+            result.push_str(&format!("{macro_name}(\"{format}\")"));
+        } else {
+            result.push_str(&format!(
+                "{macro_name}(\"{format}\", {})",
+                rest_args.join(", ")
+            ));
+        }
+        changed = true;
+        rest = &rest[close + 1..];
+    }
+    result.push_str(rest);
+    (result, changed)
+}
+
+/// Merges consecutive `impl Type { .. }` blocks into one.
+fn merge_duplicate_impl_blocks(code: &str) -> (String, bool) {
+    static IMPL_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"impl\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{").unwrap());
+
+    let mut updated = code.to_string();
+    let mut changed = false;
+    loop {
+        let blocks: Vec<(usize, usize, usize, usize, String)> = IMPL_REGEX
+            .captures_iter(&updated)
+            .filter_map(|captures| {
+                let whole = captures.get(0)?;
+                let brace = whole.end() - 1;
+                let close = find_matching_delimiter(&updated, brace, '{', '}')?;
+                Some((whole.start(), brace, close, close + 1, captures[1].to_string()))
+            })
+            .collect();
+
+        let mut merged = false;
+        for pair in blocks.windows(2) {
+            let (start_a, brace_a, close_a, end_a, ref name_a) = pair[0];
+            let (start_b, brace_b, close_b, end_b, ref name_b) = pair[1];
+            if name_a != name_b || !updated[end_a..start_b].trim().is_empty() {
+                continue;
+            }
+            let inner_a = &updated[brace_a + 1..close_a];
+            let inner_b = &updated[brace_b + 1..close_b];
+            let combined = format!("impl {name_a} {{{inner_a}{inner_b}}}");
+            updated = format!("{}{}{}", &updated[..start_a], combined, &updated[end_b..]);
+            merged = true;
+            changed = true;
+            break;
+        }
+        if !merged {
+            break;
+        }
+    }
+    (updated, changed)
+}
+
 /// Drops `unsafe` from functions whose body performs no unsafe operation, and
 /// from call sites that no longer need it. Verified by the caller, so a wrong
 /// guess is rolled back instead of silently changing behaviour.
@@ -2398,6 +2762,14 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
         }
     }
 
+    let (class_normalized, class_changed) = normalize_cpp2rust_class_translation(&candidate);
+    if class_changed {
+        candidate = class_normalized;
+        summary
+            .applied_passes
+            .push("normalize_cpp2rust_class_translation".to_string());
+    }
+
     let (abi_normalized, abi_changed) = normalize_c_abi_translation(&candidate);
     if abi_changed {
         candidate = abi_normalized;
@@ -2510,6 +2882,7 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 }
             }
 
+            if std::env::var("DEBUG_CAND").is_ok() { let _ = fs::write("/tmp/candidate.rs", &candidate); }
             if still_raw_engine_transcription(faithful_rust, &candidate) {
                 summary.compiler_verified = false;
                 summary.verification_error = Some(
@@ -2531,6 +2904,7 @@ pub fn postprocess_rust_code(faithful_rust: &str) -> (String, PostProcessingSumm
                 candidate_err
             ));
             summary.formatted_with_rustfmt = false;
+            if std::env::var("DEBUG_CAND").is_ok() { let _ = fs::write("/tmp/candidate_err.rs", &candidate); }
             if still_raw_engine_transcription(faithful_rust, faithful_rust) {
                 summary.compiler_verified = false;
                 summary.verification_error = Some(
@@ -2726,6 +3100,80 @@ pub fn main() {
     }
 
     #[test]
+    fn lowers_cpp2rust_class_translation_to_owned_struct_and_impl() {
+        let faithful = r#"extern crate libcc2rs;
+use libcc2rs::*;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+#[derive(Clone, Record, ByteRepr, VaArg, FnPtrArg, CppFrom, Default)]
+#[cpp_from(i32, new, value)]
+#[byte_size(8)]
+pub struct Person {
+    #[offset(0)]
+    id: i32,
+    #[offset(4)]
+    score: f32,
+}
+impl Person {
+    pub fn new(mut person_id: i32) -> Self {
+        Self { id: person_id, score: 0_f32 }
+    }
+}
+pub fn main() {
+    __cpp2rust_init_globals();
+    std::process::exit(main_0());
+}
+fn main_0() -> i32 {
+    let person1: Value<Person> = Rc::new(RefCell::new(Person::new({ 1 })));
+    ({ PersonImpl::set_score(&person1.as_pointer(), 12_f32) });
+    write!(
+        libcc2rs::cout(),
+        "score {:}\n",
+        ({ PersonImpl::get_score(&person1.as_pointer(),) }),
+    );
+    return 0;
+}
+pub trait PersonImpl {
+    fn set_score(&self, score: f32);
+    fn get_score(&self) -> f32;
+}
+impl PersonImpl for Ptr<Person> {
+    fn set_score(&self, mut score: f32) {
+        if ((*self).with(|__s| __s.id) > 0) {
+            field!((*self), score).write(score);
+        }
+    }
+    fn get_score(&self) -> f32 {
+        if ((*self).with(|__s| __s.id) > 0) {
+            return (*self).with(|__s| __s.score);
+        }
+        return -1_f32;
+    }
+}
+pub fn __cpp2rust_init_globals() {}"#;
+
+        let (idiomatic, summary) = postprocess_rust_code(faithful);
+        assert!(summary.compiler_verified, "{:?}", summary.verification_error);
+        assert!(summary
+            .applied_passes
+            .iter()
+            .any(|pass| pass == "normalize_cpp2rust_class_translation"));
+        assert!(!idiomatic.contains("libcc2rs"));
+        assert!(!idiomatic.contains("unsafe"));
+        assert!(!idiomatic.contains("extern \"C\""));
+        assert!(!idiomatic.contains("Value<"));
+        assert!(!idiomatic.contains("Ptr<"));
+        assert!(!idiomatic.contains("field!("));
+        assert!(idiomatic.contains("pub struct Person"));
+        assert!(idiomatic.contains("impl Person {"));
+        assert!(idiomatic.contains("fn set_score(&mut self"));
+        assert!(idiomatic.contains("fn get_score(&self"));
+        assert!(idiomatic.contains("person1.set_score(12_f32);"));
+        assert!(idiomatic.contains("println!(\"score"));
+        assert!(idiomatic.contains("#[derive(Clone, Default)]") || idiomatic.contains("#[derive(Clone)]"));
+    }
+
+    #[test]
     fn lowers_puts_literal_and_fixed_char_buffer_io_to_safe_rust() {
         let faithful = r#"extern "C" {
     fn puts(_: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
@@ -2911,6 +3359,7 @@ fn main() {
         assert!(c_printf_format_to_rust(r"%5d\0").is_none());
     }
 }
+
 
 
 

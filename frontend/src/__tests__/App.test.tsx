@@ -157,7 +157,7 @@ describe("App component", () => {
     expect(screen.queryByTestId("output-explanation-summary")).not.toBeInTheDocument();
   });
 
-  it("switches cleanly between Idiomatic Rust and Faithful Rust modes", async () => {
+  it("switches cleanly between Readable Rust and Generated Rust modes", async () => {
     render(<App />);
     const styleSelect = screen.getByTestId("output-style-select") as HTMLSelectElement;
     expect(styleSelect.value).toBe("idiomatic");
@@ -168,6 +168,9 @@ describe("App component", () => {
       expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("faithful-ok");
       expect(screen.getByTestId("rust-editor-pane")).toHaveTextContent("// #include <iostream>");
     });
+
+    const styleOptions = Array.from(styleSelect.options).map((option) => option.label);
+    expect(styleOptions).toEqual(["Readable Rust", "Generated Rust"]);
 
     fireEvent.change(styleSelect, { target: { value: "idiomatic" } });
     expect(styleSelect.value).toBe("idiomatic");

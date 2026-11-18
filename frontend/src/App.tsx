@@ -539,7 +539,7 @@ export const App: React.FC = () => {
 
   const rustEditorPane = (
     <EditorPane
-      title="Generated Rust"
+      title={outputStyle === "idiomatic" ? "Readable Rust" : "Generated Rust"}
       language="rust"
       value={rustCode}
       onChange={handleRustEditorChange}
