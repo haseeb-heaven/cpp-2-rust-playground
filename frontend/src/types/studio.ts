@@ -84,6 +84,8 @@ export interface ConversionResponse {
   explanations?: ConversionExplanation[];
   clippyLints?: ClippyLint[];
   clippyAvailable?: boolean;
+  clippyChecked?: boolean;
+  clippyTargetStyle?: RustOutputStyle;
   clippyError?: string | null;
 }
 

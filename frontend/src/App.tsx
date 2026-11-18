@@ -91,8 +91,12 @@ export const App: React.FC = () => {
 
   const [lineMappings, setLineMappings] = useState<LineMapping[]>([]);
   const [conversionDiagnostics, setConversionDiagnostics] = useState<ConversionDiagnostic[]>([]);
-  const [clippyLints, setClippyLints] = useState<ClippyLint[]>([]);
-  const [clippyError, setClippyError] = useState<string | null>(null);
+  const [clippyAnalysis, setClippyAnalysis] = useState<{
+    lints: ClippyLint[];
+    error: string | null;
+    checked: boolean;
+    analyzedCode: string;
+  } | null>(null);
   const [usedFallback, setUsedFallback] = useState<boolean>(true);
   const [compilerVerified, setCompilerVerified] = useState<boolean>(true);
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
@@ -175,8 +179,16 @@ export const App: React.FC = () => {
         .then((conversionResult) => {
           setLineMappings(conversionResult.lineMappings);
           setConversionDiagnostics(conversionResult.diagnostics);
-          setClippyLints(conversionResult.clippyLints ?? []);
-          setClippyError(conversionResult.clippyError ?? null);
+          const analyzedCode =
+            (conversionResult.clippyTargetStyle ?? effectiveStyle) === "faithful"
+              ? (conversionResult.faithfulRustCode ?? conversionResult.generatedRustCode)
+              : (conversionResult.idiomaticRustCode ?? conversionResult.generatedRustCode);
+          setClippyAnalysis({
+            lints: conversionResult.clippyLints ?? [],
+            error: conversionResult.clippyError ?? null,
+            checked: conversionResult.clippyChecked ?? false,
+            analyzedCode
+          });
           setUsedFallback(conversionResult.usedFallback ?? true);
           setCompilerVerified(conversionResult.postProcessing?.compilerVerified ?? false);
           setFallbackReason(conversionResult.fallbackReason ?? null);
@@ -631,8 +643,9 @@ export const App: React.FC = () => {
           lastExecutedLabel={lastExecutedLabel}
           isExecuting={isExecuting}
           conversionDiagnostics={conversionDiagnostics}
-          clippyLints={clippyLints}
-          clippyError={clippyError}
+          clippyAnalysis={clippyAnalysis}
+          currentRustCode={rustCode}
+          onSelectRustLine={handleRustCursorLine}
           lineMappings={lineMappings}
           onSelectLineMapping={handleSelectLineMapping}
         />

@@ -173,6 +173,8 @@ pub struct ConversionResponse {
     pub explanations: Vec<ConversionExplanation>,
     pub clippy_lints: Vec<ClippyLint>,
     pub clippy_available: bool,
+    pub clippy_checked: bool,
+    pub clippy_target_style: RustOutputStyle,
     pub clippy_error: Option<String>,
 }
 

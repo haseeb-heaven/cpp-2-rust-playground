@@ -3,6 +3,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { cpp } from "@codemirror/lang-cpp";
 import { rust } from "@codemirror/lang-rust";
 import { acceptCompletion, autocompletion, type CompletionContext } from "@codemirror/autocomplete";
+import { indentMore } from "@codemirror/commands";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { Decoration, EditorView, keymap } from "@codemirror/view";
 import { Prec, StateField } from "@codemirror/state";
@@ -45,13 +46,22 @@ const cppCompletionOptions = [
 
 function completeCpp(context: CompletionContext) {
   const word = context.matchBefore(/[A-Za-z_:#][A-Za-z0-9_:#<>.]*/);
-  if (!context.explicit && !word) {
+  if (!word && !context.explicit) {
     return null;
   }
-  return {
-    from: word?.from ?? context.pos,
-    options: cppCompletionOptions
-  };
+  if (!word || word.from === word.to) {
+    return { from: context.pos, options: cppCompletionOptions, filter: false };
+  }
+  // Filter here so the popup only narrows as the user types; returning every
+  // option for every word leaves no active entry for Tab to accept.
+  const query = word.text.toLowerCase();
+  const options = cppCompletionOptions.filter((option) =>
+    option.label.toLowerCase().includes(query)
+  );
+  if (options.length === 0) {
+    return null;
+  }
+  return { from: word.from, options };
 }
 
 function createLineHighlightExtension(highlightedLines: number[], errorLines: number[]) {
@@ -119,24 +129,49 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   secondaryBadgeTestId,
   testId
 }) => {
-  const extensions = useMemo(() => {
-    const languageExtension = language === "cpp" ? cpp() : rust();
-    const highlightExtension = createLineHighlightExtension(highlightedLines, errorLines);
-    const cursorListener = EditorView.updateListener.of((update) => {
-      if (update.selectionSet && onCursorLineChange) {
-        const cursorPosition = update.state.selection.main.head;
-        const lineNumber = update.state.doc.lineAt(cursorPosition).number;
-        onCursorLineChange(lineNumber);
-      }
-    });
-    const completionExtension = language === "cpp"
-      ? [
-          autocompletion({ override: [completeCpp] }),
-          Prec.high(keymap.of([{ key: "Tab", run: acceptCompletion }]))
-        ]
-      : [];
-    return [languageExtension, highlightExtension, cursorListener, ...completionExtension];
-  }, [language, highlightedLines, errorLines, onCursorLineChange]);
+  const languageExtension = useMemo(() => (language === "cpp" ? cpp() : rust()), [language]);
+
+  // Highlighting changes with the cursor/diagnostics; completion must not, or
+  // every re-render reconfigures the editor and resets an open popup.
+  const highlightExtension = useMemo(
+    () => createLineHighlightExtension(highlightedLines, errorLines),
+    [highlightedLines, errorLines]
+  );
+
+  const cursorListener = useMemo(
+    () =>
+      EditorView.updateListener.of((update) => {
+        if (update.selectionSet && onCursorLineChange) {
+          const cursorPosition = update.state.selection.main.head;
+          const lineNumber = update.state.doc.lineAt(cursorPosition).number;
+          onCursorLineChange(lineNumber);
+        }
+      }),
+    [onCursorLineChange]
+  );
+
+  const completionExtension = useMemo(
+    () =>
+      language === "cpp"
+        ? [
+            autocompletion({ override: [completeCpp] }),
+            // Tab accepts an open completion and otherwise keeps indenting. The
+            // component-level `indentWithTab` is disabled so this binding is not
+            // shadowed by the highest-precedence default indentation binding.
+            Prec.high(
+              keymap.of([
+                { key: "Tab", run: (view) => acceptCompletion(view) || indentMore(view) }
+              ])
+            )
+          ]
+        : [],
+    [language]
+  );
+
+  const extensions = useMemo(
+    () => [languageExtension, highlightExtension, cursorListener, ...completionExtension],
+    [languageExtension, highlightExtension, cursorListener, completionExtension]
+  );
 
   return (
     <section className="editor-pane" data-testid={testId}>
@@ -160,11 +195,14 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
           theme={theme === "light" ? "light" : oneDark}
           extensions={extensions}
           onChange={onChange}
+          indentWithTab={false}
           basicSetup={{
             lineNumbers: true,
             highlightActiveLineGutter: true,
             foldGutter: true,
-            autocompletion: true,
+            // We install our own `autocompletion` extension for C++ below; a second
+            // built-in instance renders a popup that its own keymap cannot accept.
+            autocompletion: false,
             bracketMatching: true
           }}
         />

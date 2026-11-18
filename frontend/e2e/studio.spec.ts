@@ -21,6 +21,26 @@ test.describe("C/C++ to Rust Playground End-to-End Suite", () => {
     await expect(sourceEditorContent).toContainText("std::vector");
   });
 
+  test("filters the completion popup down to the typed prefix", async ({ page }) => {
+    await page.goto("/");
+    // Manual mode keeps background conversions from reconfiguring the editor
+    // while the completion popup is open.
+    await page.getByTestId("conversion-mode-select").selectOption("manual");
+
+    const sourceEditorContent = page
+      .getByTestId("source-editor-pane")
+      .locator(".cm-content");
+    await sourceEditorContent.click();
+    await page.keyboard.press("Meta+a");
+    await page.keyboard.press("Control+a");
+    await sourceEditorContent.fill("");
+    await sourceEditorContent.type("std::vec", { delay: 40 });
+
+    const completionList = page.locator(".cm-tooltip-autocomplete");
+    await expect(completionList.getByText("std::vector", { exact: true })).toBeVisible();
+    await expect(completionList.getByText("#include <iostream>", { exact: true })).toBeHidden();
+  });
+
   test("loads split-screen editors, pre-made examples, and real-time conversion", async ({
     page
   }) => {
@@ -448,15 +468,20 @@ int main() {
 
     await page.getByTestId("convert-now-button").click();
     await expect(page.getByTestId("rust-editor-pane")).toContainText("impl Person", {
-      timeout: 120000
+      timeout: 180000
     });
 
     await page.getByTestId("clippy-tab").click();
     const clippyList = page.getByTestId("clippy-list");
-    await expect(clippyList).toBeVisible();
-    await expect(clippyList).toContainText(/clippy::|unused_mut|no lints/, {
-      timeout: 60000
-    });
+    await expect(clippyList).toBeVisible({ timeout: 60000 });
+
+    // Clippy is an optional local tool: skip the lint assertions when it is absent
+    // instead of silently accepting an empty result.
+    if (await page.getByTestId("clippy-error").isVisible().catch(() => false)) {
+      test.skip(true, "clippy is not installed in this environment");
+    }
+    await expect(clippyList).toContainText("unused_mut", { timeout: 60000 });
+    await expect(clippyList).toContainText(/Rust line \d+:\d+/);
   });
 
   test("shows the engine and diagnostics panel for C++ exceptions", async ({

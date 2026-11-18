@@ -371,7 +371,7 @@ fn push_loop_and_style_explanations(
             (
                 "Readable Rust",
                 format!(
-                    "{} Readable Rust is the idiomatic projection of the engine output: it removes boilerplate and C ABI plumbing, drops redundant `mut`/casts, lowers C idioms to safe Rust, formats with `rustfmt`, and verifies the result with `rustc` and `clippy` ({}).",
+                    "{} Readable Rust is the idiomatic projection of the engine output: it removes boilerplate and C ABI plumbing, drops redundant `mut`/casts, lowers C idioms to safe Rust, formats with `rustfmt`, and verifies the result with `rustc` (and lints it with `clippy` when it is installed) ({}).",
                     engine_note, summary_details
                 ),
             )
@@ -401,8 +401,8 @@ fn push_loop_and_style_explanations(
         construct: format!("Output Mode ({})", style_label),
         cpp_pattern: transpiler_engine.to_string(),
         rust_equivalent: match output_style {
-            RustOutputStyle::Idiomatic => "Idiomatic Rust (Learning Mode)".to_string(),
-            RustOutputStyle::Faithful => "Faithful Rust (Raw Output)".to_string(),
+            RustOutputStyle::Idiomatic => "Readable Rust".to_string(),
+            RustOutputStyle::Faithful => "Generated Rust".to_string(),
         },
         why_chosen: style_why,
         ownership_and_iteration: verification_note,

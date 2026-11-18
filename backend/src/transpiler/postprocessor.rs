@@ -1004,7 +1004,7 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
     // Nested dispatches are rewritten innermost-last, so repeat until stable,
     // and never touch program text inside literals or comments.
     static IMPL_CALL_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\b\w+Impl::(\w+)\(\s*&\s*([A-Za-z_]\w*)\.as_pointer\(\)\s*,?\s*([^()]*(?:\([^()]*\))?[^()]*?)\s*,?\s*\)").unwrap()
+        Regex::new(r"\b\w+Impl::(\w+)\(\s*&\s*([A-Za-z_]\w*)\.as_pointer\(\)\s*,?\s*((?:[^()]*\([^()]*\)){0,3}[^()]*?)\s*,?\s*\)").unwrap()
     });
     for _ in 0..8 {
         let calls = transform_outside_literals(&updated, |text| {
@@ -1098,7 +1098,7 @@ fn normalize_cpp2rust_class_translation(code: &str) -> (String, bool) {
     (updated, changed)
 }
 
-/// Rewrites cpp2rust field access inside a method body.
+/// Rewrites cpp2rust field access inside a method body, leaving literals intact.
 fn rewrite_cpp2rust_method_body(body: &str) -> String {
     static FIELD_WRITE_REGEX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"field!\(\(\*self\),\s*(\w+)\)\.write\(([^;]*)\);").unwrap());
@@ -1107,15 +1107,17 @@ fn rewrite_cpp2rust_method_body(body: &str) -> String {
     static WITH_ACCESS_REGEX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"\(\*self\)\.with\(\|__s\|\s*__s\.([A-Za-z_][A-Za-z0-9_]*)\)").unwrap());
 
-    let written = FIELD_WRITE_REGEX
-        .replace_all(body, "self.$1 = $2;")
-        .to_string();
-    let read = FIELD_READ_REGEX
-        .replace_all(&written, "self.$1")
-        .to_string();
-    WITH_ACCESS_REGEX
-        .replace_all(&read, "self.$1")
-        .to_string()
+    transform_outside_literals(body, |text| {
+        let written = FIELD_WRITE_REGEX
+            .replace_all(text, "self.$1 = $2;")
+            .to_string();
+        let read = FIELD_READ_REGEX
+            .replace_all(&written, "self.$1")
+            .to_string();
+        WITH_ACCESS_REGEX
+            .replace_all(&read, "self.$1")
+            .to_string()
+    })
 }
 
 /// Takes `&mut self` for methods that assign a field, `&self` otherwise.

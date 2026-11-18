@@ -524,8 +524,8 @@ async fn generated_cpp_programs_convert_via_backbone_and_match_source_output() {
         );
         let template = index % 5;
         assert!(
-            conversion.transpiler_engine.contains("cpp2rust CLI"),
-            "cpp case {index}: the cpp2rust backbone must run, got {:?}",
+            conversion.transpiler_engine.starts_with("cpp2rust CLI ("),
+            "cpp case {index}: the cpp2rust backbone must be the engine, got {:?}",
             conversion.transpiler_engine
         );
         if matches!(template, 0 | 3) {

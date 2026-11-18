@@ -126,7 +126,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           value={outputStyle}
           onChange={(event) => onOutputStyleChange(event.target.value as RustOutputStyle)}
           aria-label="Rust output mode"
-          title="Readable Rust: idiomatic projection, verified with rustc and clippy | Generated Rust: the raw output of the c2rust / cpp2rust backbone"
+          title="Readable Rust: idiomatic projection verified with rustc (plus clippy lints when installed) | Generated Rust: the raw c2rust / cpp2rust backbone output, or the built-in regex fallback when a backbone is unavailable"
           data-testid="output-style-select"
         >
           <option value="idiomatic">Readable Rust</option>

@@ -16,10 +16,16 @@ interface OutputConsoleProps {
   lastExecutedLabel: string | null;
   isExecuting: boolean;
   conversionDiagnostics: ConversionDiagnostic[];
-  clippyLints?: ClippyLint[];
-  clippyError?: string | null;
+  clippyAnalysis?: {
+    lints: ClippyLint[];
+    error: string | null;
+    checked: boolean;
+    analyzedCode: string;
+  } | null;
+  currentRustCode?: string;
   lineMappings: LineMapping[];
   onSelectLineMapping: (sourceLine: number, rustStartLine: number, rustEndLine: number) => void;
+  onSelectRustLine?: (lineNumber: number) => void;
 }
 
 type ConsoleTab = "output" | "diagnostics" | "clippy" | "mappings";
@@ -32,10 +38,11 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
   lastExecutedLabel,
   isExecuting,
   conversionDiagnostics,
-  clippyLints = [],
-  clippyError = null,
+  clippyAnalysis = null,
+  currentRustCode = "",
   lineMappings,
-  onSelectLineMapping
+  onSelectLineMapping,
+  onSelectRustLine
 }) => {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("output");
 
@@ -43,8 +50,16 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
     ...conversionDiagnostics,
     ...(executionResult?.diagnostics ?? [])
   ];
+  const clippyLints = clippyAnalysis?.lints ?? [];
+  const clippyError = clippyAnalysis?.error ?? null;
+  const clippyChecked = clippyAnalysis?.checked ?? false;
+  // Lints belong to the exact Rust text that was analysed; a manual edit makes
+  // their line numbers meaningless, so stop showing them until the next run.
+  const clippyStale =
+    clippyAnalysis !== null && currentRustCode !== clippyAnalysis.analyzedCode;
   const clippyErrors = clippyLints.filter((lint) => lint.level === "error").length;
-  const clippyWarnings = clippyLints.length - clippyErrors;
+  const clippyWarnings = clippyLints.filter((lint) => lint.level !== "error").length;
+  const clippyMissing = clippyError !== null && /not installed|not found|no such file/i.test(clippyError);
 
   return (
     <section className="output-console" data-testid="output-console">
@@ -76,7 +91,7 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
           data-testid="clippy-tab"
         >
           <ShieldCheck size={14} />
-          <span>Clippy ({clippyLints.length})</span>
+          <span>Clippy ({clippyChecked && !clippyStale ? clippyLints.length : "?"})</span>
         </button>
 
         <button
@@ -197,10 +212,20 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
 
         {activeTab === "clippy" && (
           <div className="diagnostics-list" data-testid="clippy-list">
-            {clippyError ? (
-              <div className="empty-state">
-                Clippy is unavailable: {clippyError}
-                {" "}Install it with `rustup component add clippy`.
+            {clippyError !== null ? (
+              <div className="empty-state" data-testid="clippy-error">
+                {clippyMissing
+                  ? `Clippy is not installed: ${clippyError}. Install it with \`rustup component add clippy\`.`
+                  : `Clippy could not analyse this Rust: ${clippyError}`}
+              </div>
+            ) : clippyStale ? (
+              <div className="empty-state" data-testid="clippy-stale">
+                The Rust editor changed since the last Clippy run. Convert again to lint the
+                current code.
+              </div>
+            ) : !clippyChecked ? (
+              <div className="empty-state" data-testid="clippy-not-run">
+                Clippy has not analysed this Rust yet. Convert the program to run it.
               </div>
             ) : clippyLints.length === 0 ? (
               <div className="empty-state" data-testid="clippy-clean">
@@ -213,25 +238,39 @@ export const OutputConsole: React.FC<OutputConsoleProps> = ({
                   {clippyWarnings === 1 ? "" : "s"}
                 </div>
                 {clippyLints.map((lint, index) => (
-                  <div
+                  <button
                     key={index}
-                    className={`diagnostic-item severity-${
-                      lint.level === "error" ? "error" : "warning"
+                    type="button"
+                    className={`diagnostic-item diagnostic-button severity-${
+                      lint.level === "error" ? "error" : lint.level === "info" ? "info" : "warning"
                     }`}
-                    onClick={() =>
-                      onSelectLineMapping(lint.lineNumber, lint.lineNumber, lint.lineNumber)
-                    }
+                    onClick={() => {
+                      if (onSelectRustLine) {
+                        onSelectRustLine(lint.lineNumber);
+                        return;
+                      }
+                      const mapping = lineMappings.find(
+                        (item) =>
+                          lint.lineNumber >= item.rustStartLine &&
+                          lint.lineNumber <= item.rustEndLine
+                      );
+                      onSelectLineMapping(
+                        mapping?.sourceLine ?? lint.lineNumber,
+                        lint.lineNumber,
+                        lint.lineNumber
+                      );
+                    }}
                   >
                     <div className="diagnostic-header">
                       <span className="diagnostic-badge">
                         {lint.level.toUpperCase()} · {lint.lint}
                       </span>
                       <span className="diagnostic-line">
-                        Line {lint.lineNumber}:{lint.column}
+                        Rust line {lint.lineNumber}:{lint.column}
                       </span>
                     </div>
                     <div className="diagnostic-message">{lint.message}</div>
-                  </div>
+                  </button>
                 ))}
               </>
             )}

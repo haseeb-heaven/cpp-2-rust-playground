@@ -21,7 +21,7 @@ An interactive web IDE and compiler wrapper built with **Rust (Axum)** and **Rea
 
 ### Output Modes
 
-- **Generated Rust**: The raw output of the C/C++ → Rust backbone (`c2rust` for C, `cpp2rust` for C++), preserved 1:1. It may contain `unsafe`, `extern "C"`, C ABI types, and engine runtime plumbing.
+- **Generated Rust**: The raw output of the C/C++ → Rust backbone (`c2rust` for C, `cpp2rust` for C++), preserved 1:1 — or the built-in regex fallback output when a backbone is not installed. It may contain `unsafe`, `extern "C"`, C ABI types, and engine runtime plumbing.
 - **Readable Rust**: The idiomatic projection of that output. Cleaned, `rustfmt`-formatted, `rustc`-verified, and strictly plain safe Rust: no `unsafe`, no `extern "C"`, no C ABI types, no libc calls. C constructs with a safe Rust equivalent are lowered automatically (`printf`/`puts` → `print!`/`println!`, `char` buffers → `[u8; N]` + `stdin().read`, `malloc`/`free` → `Vec`, C++ classes → structs with inherent methods). When no safe projection exists, the app says so instead of showing raw machine-shaped code, and every transform failing `rustc` verification rolls back automatically.
 - **Clippy Lints**: The Readable Rust is also linted with [`clippy`](https://github.com/rust-lang/rust-clippy) (`clippy-driver -W clippy::all`). The **Clippy** console tab lists every lint with its level, lint name, line/column, and message; if `clippy` is missing the tab says so and how to install it (`rustup component add clippy`).
 

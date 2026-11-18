@@ -726,6 +726,7 @@ pub fn convert_source_to_rust_with_style(
         used_fallback,
         &transpiler_engine,
     );
+    let conversion_output_style = output_style.clone();
     let generated_rust_code = match output_style {
         RustOutputStyle::Faithful => faithful_rust_code.clone(),
         RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
@@ -737,16 +738,20 @@ pub fn convert_source_to_rust_with_style(
             mapping.rust_end_line = mapping.rust_end_line.min(max_line);
         }
     }
-    // Lint the code the user actually reads: the verified Readable projection,
-    // otherwise the raw Generated output.
-    let lint_target = if post_processing.compiler_verified {
-        idiomatic_rust_code.clone()
-    } else {
-        faithful_rust_code.clone()
+    // Lint exactly the Rust the user selected, so reported line numbers match
+    // the editor. The unavailable notice is a comment-only placeholder.
+    let lint_target = match output_style {
+        RustOutputStyle::Faithful => faithful_rust_code.clone(),
+        RustOutputStyle::Idiomatic => idiomatic_rust_code.clone(),
     };
-    let (clippy_lints, clippy_error) = match clippy::run_clippy(&lint_target) {
-        Ok(lints) => (lints, None),
-        Err(error) => (Vec::new(), Some(error)),
+    let is_unavailable_notice = lint_target.trim_start().starts_with("// Readable Rust is unavailable");
+    let (clippy_lints, clippy_checked, clippy_error) = if is_unavailable_notice {
+        (Vec::new(), false, None)
+    } else {
+        match clippy::run_clippy(&lint_target) {
+            Ok(lints) => (lints, true, None),
+            Err(error) => (Vec::new(), false, Some(error)),
+        }
     };
     let conversion_time_milliseconds = start_instant.elapsed().as_millis();
 
@@ -767,6 +772,8 @@ pub fn convert_source_to_rust_with_style(
         explanations,
         clippy_lints,
         clippy_available: clippy::clippy_available(),
+        clippy_checked,
+        clippy_target_style: conversion_output_style,
         clippy_error,
     }
 }

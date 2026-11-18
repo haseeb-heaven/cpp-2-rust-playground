@@ -5,11 +5,15 @@ use crate::models::ClippyLint;
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static CLIPPY_BINARY: Lazy<Option<PathBuf>> = Lazy::new(resolve_clippy_binary);
+
+/// Upper bound for one lint run so a stuck child cannot hold a request worker.
+const CLIPPY_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Whether a usable `clippy-driver` was found on this machine.
 pub fn clippy_available() -> bool {
@@ -63,16 +67,16 @@ pub fn run_clippy(code: &str) -> Result<Vec<ClippyLint>, String> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    let directory = std::env::temp_dir().join(format!(
+    let directory = TempDirectory(std::env::temp_dir().join(format!(
         "playground-clippy-{}-{stamp}",
         std::process::id()
-    ));
-    fs::create_dir_all(&directory).map_err(|error| format!("cannot create temp dir: {error}"))?;
-    let source_path = directory.join("generated.rs");
-    let metadata_path = directory.join("generated.rmeta");
+    )));
+    fs::create_dir_all(&directory.0).map_err(|error| format!("cannot create temp dir: {error}"))?;
+    let source_path = directory.0.join("generated.rs");
+    let metadata_path = directory.0.join("generated.rmeta");
     fs::write(&source_path, code).map_err(|error| format!("cannot write source: {error}"))?;
 
-    let output = Command::new(binary)
+    let mut child = Command::new(binary)
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -86,13 +90,58 @@ pub fn run_clippy(code: &str) -> Result<Vec<ClippyLint>, String> {
         .arg("-W")
         .arg("clippy::all")
         .arg(&source_path)
-        .output();
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot run clippy-driver: {error}"))?;
 
-    let _ = fs::remove_dir_all(&directory);
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < CLIPPY_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "clippy-driver did not finish within {}s",
+                    CLIPPY_TIMEOUT.as_secs()
+                ));
+            }
+            Err(error) => return Err(format!("cannot wait for clippy-driver: {error}")),
+        }
+    };
 
-    let output = output.map_err(|error| format!("cannot run clippy-driver: {error}"))?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Ok(parse_clippy_diagnostics(&stderr))
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    drop(directory);
+
+    let lints = parse_clippy_diagnostics(&stderr);
+    let succeeded = status.map(|status| status.success()).unwrap_or(false);
+    if lints.is_empty() && !succeeded {
+        // A rustup proxy or a broken toolchain can fail before printing JSON.
+        let detail = stderr.trim();
+        let detail = if detail.is_empty() {
+            "no diagnostic output".to_string()
+        } else {
+            detail.lines().take(4).collect::<Vec<_>>().join(" ")
+        };
+        return Err(format!("clippy-driver failed: {detail}"));
+    }
+    Ok(lints)
+}
+
+/// Removes its directory when dropped, including on early error returns.
+struct TempDirectory(PathBuf);
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn parse_clippy_diagnostics(stderr: &str) -> Vec<ClippyLint> {
@@ -139,7 +188,12 @@ fn parse_clippy_diagnostics(stderr: &str) -> Vec<ClippyLint> {
         let span = diagnostic
             .get("spans")
             .and_then(Value::as_array)
-            .and_then(|spans| spans.first());
+            .and_then(|spans| {
+                spans
+                    .iter()
+                    .find(|span| span.get("is_primary").and_then(Value::as_bool) == Some(true))
+                    .or_else(|| spans.first())
+            });
         let line_number = span
             .and_then(|span| span.get("line_start"))
             .and_then(Value::as_u64)
@@ -163,7 +217,18 @@ fn parse_clippy_diagnostics(stderr: &str) -> Vec<ClippyLint> {
     }
 
     lints.sort_by_key(|lint| (lint.line_number, lint.column));
-    lints.truncate(40);
+    const MAX_LINTS: usize = 40;
+    if lints.len() > MAX_LINTS {
+        let hidden = lints.len() - MAX_LINTS;
+        lints.truncate(MAX_LINTS);
+        lints.push(ClippyLint {
+            line_number: lints.first().map(|lint| lint.line_number).unwrap_or(1),
+            column: 1,
+            level: "info".to_string(),
+            lint: "clippy::lints_not_shown".to_string(),
+            message: format!("{hidden} more clippy lint(s) not shown"),
+        });
+    }
     lints
 }
 

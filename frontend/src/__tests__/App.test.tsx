@@ -80,6 +80,8 @@ describe("App component", () => {
                   }
                 ],
                 clippyAvailable: true,
+                clippyChecked: true,
+                clippyTargetStyle: "idiomatic",
                 clippyError: null,
                 explanations: [
                   {
@@ -178,7 +180,7 @@ describe("App component", () => {
     expect(screen.getByTestId("clippy-summary")).toHaveTextContent("0 errors · 1 warning");
     expect(screen.getByTestId("clippy-list")).toHaveTextContent("clippy::needless_return");
     expect(screen.getByTestId("clippy-list")).toHaveTextContent("unneeded `return` statement");
-    expect(screen.getByTestId("clippy-list")).toHaveTextContent("Line 3:5");
+    expect(screen.getByTestId("clippy-list")).toHaveTextContent("Rust line 3:5");
   });
 
   it("switches cleanly between Readable Rust and Generated Rust modes", async () => {
